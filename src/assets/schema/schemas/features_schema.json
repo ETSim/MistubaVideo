@@ -1,0 +1,154 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Features Schema",
+    "type": "object",
+    "properties": {
+        "features": {
+            "type": "object",
+            "properties": {
+                "enable": {
+                    "type": "object",
+                    "properties": {
+                        "gif": { "type": "boolean", "default": true },
+                        "video": { "type": "boolean", "default": true },
+                        "exr": { "type": "boolean", "default": true },
+                        "png": { "type": "boolean", "default": true },
+                        "multiView": { "type": "boolean", "default": false },
+                        "config_fallback": { "type": "boolean", "default": true }
+                    },
+                    "required": ["gif", "video", "exr", "png"]
+                },
+                "views": {
+                    "type": "object",
+                    "properties": {
+                        "defaultViews": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "default": ["front", "right", "left", "back", "top", "perspective"]
+                        },
+                        "presets": {
+                            "type": "object",
+                            "properties": {
+                                "all": { 
+                                    "type": "array", 
+                                    "items": { "type": "string" },
+                                    "default": ["front", "right", "back", "left", "top", "bottom", "perspective"]
+                                },
+                                "orthographic": {
+                                    "type": "array", 
+                                    "items": { "type": "string" },
+                                    "default": ["front", "right", "top"]
+                                },
+                                "technical": {
+                                    "type": "array", 
+                                    "items": { "type": "string" },
+                                    "default": ["front", "right", "top", "bottom"]
+                                },
+                                "complete": {
+                                    "type": "array", 
+                                    "items": { "type": "string" },
+                                    "default": ["front", "right", "back", "left", "top", "bottom", "perspective"]
+                                }
+                            }
+                        }
+                    }
+                },
+                "reports": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": { "type": "boolean", "default": false },
+                        "environment": { "type": "boolean", "default": false },
+                        "timing": { "type": "boolean", "default": false }
+                    },
+                    "required": ["enabled", "environment", "timing"]
+                },
+                "cache": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": { "type": "boolean", "default": false },
+                        "meshes": { "type": "boolean", "default": false },
+                        "scenes": { "type": "boolean", "default": false },
+                        "directory": { "type": "string", "default": "cache" }
+                    }
+                },
+                "denoising": {
+                    "type": "object",
+                    "description": "Image denoising settings",
+                    "properties": {
+                        "enabled": { 
+                            "type": "boolean", 
+                            "default": true,
+                            "description": "Enable denoising of rendered images"
+                        },
+                        "type": { 
+                            "type": "string", 
+                            "enum": ["optix", "oidn"],
+                            "default": "optix",
+                            "description": "Denoising method to use (NVIDIA OptiX or Intel Open Image Denoise)"
+                        },
+                        "strength": { 
+                            "type": "number", 
+                            "minimum": 0.0, 
+                            "maximum": 1.0, 
+                            "default": 1.0,
+                            "description": "Denoising strength (0.0-1.0)"
+                        },
+                        "useGuideBuffers": { 
+                            "type": "boolean", 
+                            "default": false,
+                            "description": "Whether to use albedo/normal buffers (NOT RECOMMENDED - can cause errors)"
+                        },
+                        "useTemporal": { 
+                            "type": "boolean", 
+                            "default": false,
+                            "description": "Whether to use temporal denoising for animations (NOT RECOMMENDED - can cause errors)"
+                        },
+                        "fallbackIfUnavailable": { 
+                            "type": "boolean", 
+                            "default": true,
+                            "description": "Continue rendering without denoising if the denoiser is unavailable"
+                        },
+                        "applyToQuality": {
+                            "type": "object",
+                            "description": "Control which quality presets use denoising",
+                            "properties": {
+                                "low": { 
+                                    "type": "boolean", 
+                                    "default": true,
+                                    "description": "Apply denoising to low quality renders (recommended)"
+                                },
+                                "medium": { 
+                                    "type": "boolean", 
+                                    "default": true,
+                                    "description": "Apply denoising to medium quality renders (recommended)"
+                                },
+                                "high": { 
+                                    "type": "boolean", 
+                                    "default": false,
+                                    "description": "Apply denoising to high quality renders (optional)"
+                                },
+                                "ultra": { 
+                                    "type": "boolean", 
+                                    "default": false,
+                                    "description": "Apply denoising to ultra quality renders (generally not needed)"
+                                }
+                            }
+                        }
+                    }
+                },
+                "config": {
+                    "type": "object",
+                    "properties": {
+                        "defaultPath": { "type": "string", "default": "config.json" },
+                        "searchPaths": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "default": [".", "config", "../config"]
+                        }
+                    }
+                }
+            },
+            "required": ["enable", "reports"]
+        }
+    }
+}

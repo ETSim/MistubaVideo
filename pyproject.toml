@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mitsuba_scene_rendering"
+version = "0.2.0"
+description = "A modular Mitsuba 3 scene rendering project with video/GIF creation."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "typer[all]",
+    "rich",
+    "python-dotenv",
+    "jsonschema",
+    "mitsuba",
+    "rpds",
+    "xmltodict",
+    "xmlschema",
+    "numpy",
+    "tqdm",
+    "gradio"
+]
+authors = [
+    { name = "Antoine Boucher", email = "antoine@antoineboucher.info" }
+]
+license = { text = "MIT" }

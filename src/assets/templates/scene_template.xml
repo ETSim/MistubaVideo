@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<scene version="2.1.0">
+    <!-- Defaults, these can be set via the command line: -Darg=value -->
+    <default name="spp" value="2048" />
+    <default name="resx" value="1920" />
+    <default name="resy" value="1080" />
+    <default name="max_depth" value="16" />
+
+    <!-- Integrator setup -->
+    <integrator type="path">
+        <integer name="max_depth" value="$max_depth" />
+    </integrator>
+
+    <!-- Camera setup -->
+    <sensor type="perspective">
+        <string name="fov_axis" value="x"/>
+        <float name="fov" value="39.597755"/>
+        <float name="principal_point_offset_x" value="0.000000"/>
+        <float name="principal_point_offset_y" value="-0.000000"/>
+        <float name="near_clip" value="0.100000"/>
+        <float name="far_clip" value="100.000000"/>
+        <transform name="to_world">
+            <rotate x="1" angle="-153.5592908827048"/>
+            <rotate y="1" angle="-46.691938147394204"/>
+            <rotate z="1" angle="-179.999991348578"/>
+            <translate value="7.358891 4.958309 6.925791"/>
+        </transform>
+        <sampler type="independent">
+            <integer name="sample_count" value="$spp" />
+        </sampler>
+        <film type="hdrfilm">
+            <integer name="width" value="$resx" />
+            <integer name="height" value="$resy" />
+            <rfilter type="box"/>
+            <string name="file_format" value="openexr"/>
+            <string name="pixel_format" value="rgb"/>
+        </film>
+    </sensor>
+
+    <!-- Materials -->
+    <bsdf type="roughplastic" id="default-bsdf">
+        <rgb name="diffuse_reflectance" value="0.8, 0.8, 0.8" />
+        <float name="alpha" value="0.1" />
+    </bsdf>
+
+    <!-- Object to render -->
+    <shape type="obj">
+        <string name="filename" value="<!-- OBJ_FILENAME -->" />
+        <ref id="default-bsdf" />
+    </shape>
+
+    <!-- Simple lighting -->
+    <emitter type="constant">
+        <rgb name="radiance" value="1.0, 1.0, 1.0" />
+    </emitter>
+</scene>

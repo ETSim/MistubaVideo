@@ -1,0 +1,88 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Logging and Debug Schema",
+    "type": "object",
+    "properties": {
+        "logging": {
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": ["string", "null"],
+                    "description": "Path to log file (null = no file logging)"
+                },
+                "level": {
+                    "type": "string",
+                    "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "debug", "info", "warning", "error", "critical"],
+                    "default": "INFO",
+                    "description": "Logging verbosity level"
+                },
+                "console": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Output logs to console"
+                },
+                "reports": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Generate timing reports"
+                        },
+                        "environment": {
+                            "type": "boolean", 
+                            "default": false,
+                            "description": "Include environment info in reports"
+                        },
+                        "timing": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Include timing analysis in reports"
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["json", "csv", "md", "markdown", "html"],
+                            "default": "json",
+                            "description": "Report output format"
+                        },
+                        "folder": {
+                            "type": "string",
+                            "default": "reports",
+                            "description": "Report output folder"
+                        }
+                    }
+                },
+                "debug": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Enable debug mode"
+                        },
+                        "verbose": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Enable verbose debug logging"
+                        },
+                        "detailed": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Enable detailed logs for frames, views, and qualities"
+                        },
+                        "show_locals": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Show local variables in exception tracebacks"
+                        },
+                        "log_config": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Log complete configuration on startup"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

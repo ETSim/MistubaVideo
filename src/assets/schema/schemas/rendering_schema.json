@@ -1,0 +1,235 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Rendering Schema",
+    "type": "object",
+    "properties": {
+        "rendering": {
+            "type": "object",
+            "properties": {
+                "multiThreaded": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "framerate": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 24,
+                    "description": "Default framerate when not using intervals"
+                },
+                "timing": {
+                    "type": "object",
+                    "properties": {
+                        "video": {
+                            "type": "object",
+                            "properties": {
+                                "frameInterval": {
+                                    "type": "number",
+                                    "minimum": 0.1,
+                                    "default": 1.0,
+                                    "description": "Time in seconds between video frames"
+                                },
+                                "duration": {
+                                    "type": ["number", "null"],
+                                    "minimum": 0.1,
+                                    "description": "Total video duration in seconds (overrides frameInterval if set)"
+                                }
+                            }
+                        },
+                        "gif": {
+                            "type": "object", 
+                            "properties": {
+                                "frameInterval": {
+                                    "type": "number",
+                                    "minimum": 0.1,
+                                    "default": 1.0,
+                                    "description": "Time in seconds between GIF frames"
+                                },
+                                "duration": {
+                                    "type": ["number", "null"],
+                                    "minimum": 0.1,
+                                    "description": "Total GIF duration in seconds (overrides frameInterval if set)"
+                                }
+                            }
+                        }
+                    },
+                    "required": ["video", "gif"]
+                },
+                "defaults": {
+                    "type": "object",
+                    "properties": {
+                        "spp": { "type": "integer", "minimum": 1, "default": 2048 },
+                        "resolution": {
+                            "type": "object",
+                            "properties": {
+                                "width": { "type": "integer", "minimum": 1, "default": 1920 },
+                                "height": { "type": "integer", "minimum": 1, "default": 1080 }
+                            }
+                        }
+                    }
+                },
+                "quality": {
+                    "type": "object",
+                    "properties": {
+                        "preset": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "ultra"],
+                            "default": "medium"
+                        },
+                        "presets": {
+                            "type": "object",
+                            "properties": {
+                                "low": {
+                                    "type": "object",
+                                    "properties": {
+                                        "spp": { "type": "integer", "minimum": 1, "default": 64 },
+                                        "maxDepth": { "type": "integer", "minimum": 1, "default": 3 }
+                                    }
+                                },
+                                "medium": {
+                                    "type": "object",
+                                    "properties": {
+                                        "spp": { "type": "integer", "minimum": 1, "default": 512 },
+                                        "maxDepth": { "type": "integer", "minimum": 1, "default": 8 }
+                                    }
+                                },
+                                "high": {
+                                    "type": "object",
+                                    "properties": {
+                                        "spp": { "type": "integer", "minimum": 1, "default": 2048 },
+                                        "maxDepth": { "type": "integer", "minimum": 1, "default": 16 }
+                                    }
+                                },
+                                "ultra": {
+                                    "type": "object",
+                                    "properties": {
+                                        "spp": { "type": "integer", "minimum": 1, "default": 8192 },
+                                        "maxDepth": { "type": "integer", "minimum": 1, "default": 24 }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "denoising": {
+                    "type": "object",
+                    "description": "Quality-specific denoising overrides",
+                    "properties": {
+                        "defaults": {
+                            "type": "object",
+                            "properties": {
+                                "enabled": { "type": "boolean", "default": true },
+                                "quality": {
+                                    "type": "object",
+                                    "properties": {
+                                        "low": { "type": "boolean", "default": true },
+                                        "medium": { "type": "boolean", "default": true },
+                                        "high": { "type": "boolean", "default": false },
+                                        "ultra": { "type": "boolean", "default": false }
+                                    },
+                                    "description": "Whether to apply denoising for each quality preset by default"
+                                },
+                                "reconstruction_filter": {
+                                    "type": "string",
+                                    "enum": ["box", "tent", "gaussian", "mitchell", "catmullrom", "lanczos"],
+                                    "default": "box",
+                                    "description": "Optimal reconstruction filter to use with the OptiX denoiser (box is recommended)"
+                                }
+                            }
+                        },
+                        "guide_buffers": {
+                            "type": "object",
+                            "properties": {
+                                "enabled": { 
+                                    "type": "boolean", 
+                                    "default": false,
+                                    "description": "Whether to use guide buffers like albedo and normals (NOT RECOMMENDED - can cause errors)"
+                                },
+                                "spp": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "default": 16,
+                                    "description": "Samples per pixel to use for guide buffer rendering (when guide buffers are enabled)"
+                                }
+                            }
+                        }
+                    }
+                },
+                "camera": {
+                    "type": "object",
+                    "properties": {
+                        "distance": {
+                            "type": "number",
+                            "minimum": 0.1,
+                            "default": 4.0,
+                            "description": "Default camera distance from object"
+                        },
+                        "perspective": {
+                            "type": "object",
+                            "properties": {
+                                "fov": {
+                                    "type": "number",
+                                    "minimum": 1,
+                                    "maximum": 179,
+                                    "default": 45.0
+                                },
+                                "fov_axis": {
+                                    "type": "string",
+                                    "enum": ["x", "y", "diagonal"],
+                                    "default": "x"
+                                }
+                            }
+                        },
+                        "positions": {
+                            "type": "object",
+                            "properties": {
+                                "perspective": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                },
+                                "front": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                },
+                                "right": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                },
+                                "back": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                },
+                                "left": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                },
+                                "top": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                },
+                                "bottom": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "minItems": 3,
+                                    "maxItems": 3
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "required": ["multiThreaded", "framerate", "timing"]
+        }
+    }
+}

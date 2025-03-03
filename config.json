@@ -1,0 +1,204 @@
+{
+    "paths": {
+        "output": {
+            "root": "output",
+            "folders": {
+                "exr": "exr",
+                "png": "png",
+                "video": "video",
+                "gif": "gif",
+                "scenes": "scenes",
+                "meshes": "meshes",
+                "reports": "reports",
+                "logs": "logs",
+                "cache": "cache"
+            }
+        },
+        "templates": {
+            "scene": "src/assets/templates/scene_template.xml"
+        },
+        "ffmpeg": "ffmpeg",
+        "config": {
+            "search": [".", "config", "../config"],
+            "default": "config.json"
+        }
+    },
+    "files": {
+        "extensions": {
+            "exr": ".exr",
+            "png": ".png"
+        },
+        "defaults": {
+            "video": "video.mp4",
+            "gif": "animation.gif"
+        }
+    },
+    "rendering": {
+        "multiThreaded": false,
+        "framerate": 1,
+        "timing": {
+            "video": {
+                "frameInterval": 1.0,
+                "duration": null
+            },
+            "gif": {
+                "frameInterval": 1.0,
+                "duration": null
+            }
+        },
+        "defaults": {
+            "spp": 128,
+            "resolution": {
+                "width": 1920,
+                "height": 1080
+            },
+            "maxDepth": 8,
+            "device": "cuda",
+            "stopOnError": true
+        },
+        "quality": {
+            "preset": "medium",
+            "presets": {
+                "low": {
+                    "spp": 64,
+                    "maxDepth": 3
+                },
+                "medium": {
+                    "spp": 512,
+                    "maxDepth": 8
+                },
+                "high": {
+                    "spp": 2048,
+                    "maxDepth": 16
+                },
+                "ultra": {
+                    "spp": 4096,
+                    "maxDepth": 24
+                },
+                "custom": {
+                    "spp": 128,
+                    "maxDepth": 8
+                }
+            }
+        },
+        "threading": {
+            "enabled": false,
+            "maxWorkers": null
+        },
+        "integrator": {
+            "type": "path",
+            "max_depth": 8,
+            "rr_depth": 5,
+            "hide_emitters": false
+        },
+        "film": {
+            "type": "hdrfilm",
+            "width": 1920,
+            "height": 1080,
+            "file_format": "openexr",
+            "pixel_format": "rgb",
+            "component_format": "float16",
+            "rfilter": {
+                "type": "gaussian",
+                "radius": 2.0
+            }
+        },
+        "sensor": {
+            "type": "perspective",
+            "fov": 45.0,
+            "fov_axis": "x",
+            "near_clip": 0.01,
+            "far_clip": 10000.0,
+            "focal_length": "50mm"
+        },
+        "camera": {
+            "distance": 4.0,
+            "perspective": {
+                "fov": 45.0,
+                "fov_axis": "x"
+            },
+            "positions": {
+                "perspective": [4.0, 4.0, 4.0],
+                "front": [0, 0, 4.0],
+                "right": [4.0, 0, 0],
+                "back": [0, 0, -4.0],
+                "left": [-4.0, 0, 0],
+                "top": [0, 4.0, 0],
+                "bottom": [0, -4.0, 0]
+            }
+        }
+    },
+    "features": {
+        "enable": {
+            "gif": true,
+            "video": true,
+            "exr": true,
+            "png": true,
+            "multiView": true,
+            "config_fallback": true
+        },
+        "views": {
+            "defaultViews": ["front", "right", "left", "back", "top", "perspective"],
+            "presets": {
+                "all": ["front", "right", "back", "left", "top", "bottom", "perspective"],
+                "orthographic": ["front", "right", "top"],
+                "technical": ["front", "right", "top", "bottom"],
+                "complete": ["front", "right", "back", "left", "top", "bottom", "perspective"]
+            }
+        },
+        "reports": {
+            "enabled": false,
+            "environment": false,
+            "timing": false
+        },
+        "cache": {
+            "enabled": false,
+            "meshes": false,
+            "scenes": false,
+            "directory": "cache"
+        },
+        "denoising": {
+            "enabled": true,
+            "type": "optix",
+            "strength": 1.0,
+            "useGuideBuffers": false,
+            "useTemporal": false,
+            "fallbackIfUnavailable": true,
+            "applyToQuality": {
+                "low": true,
+                "medium": true,
+                "high": false,
+                "ultra": false
+            }
+        },
+        "config": {
+            "defaultPath": "config.json",
+            "searchPaths": [".", "config", "../config"]
+        }
+    },
+    "patterns": {
+        "objFiles": "\\d+\\.obj",
+        "scenePrefix": "multi_",
+        "framePattern": "frame_%d",
+        "frameViewPattern": "frame_%d_%s"
+    },
+    "logging": {
+        "file": null,
+        "level": "INFO",
+        "console": true,
+        "reports": {
+            "enabled": false,
+            "environment": false,
+            "timing": false,
+            "format": "json",
+            "folder": "reports"
+        },
+        "debug": {
+            "enabled": false,
+            "verbose": false,
+            "detailed": false,
+            "show_locals": true,
+            "log_config": false
+        }
+    }
+}

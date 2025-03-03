@@ -1,0 +1,47 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Complete Mitsuba Config Schema",
+    "type": "object",
+    "allOf": [
+        { "$ref": "schemas/paths_schema.json" },
+        { "$ref": "schemas/rendering_schema.json" },
+        { "$ref": "schemas/features_schema.json" }
+    ],
+    "required": ["paths", "rendering", "features"],
+    "additionalProperties": false,
+    "definitions": {
+        "fault_handling": {
+            "type": "object",
+            "properties": {
+                "onError": {
+                    "type": "string",
+                    "enum": ["continue", "stop", "retry"],
+                    "default": "stop"
+                },
+                "maxRetries": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 3
+                },
+                "retryDelay": {
+                    "type": "number",
+                    "minimum": 0,
+                    "default": 1.0
+                }
+            }
+        }
+    },
+    "properties": {
+        "fault": {
+            "type": "object",
+            "allOf": [
+                { "$ref": "#/definitions/fault_handling" }
+            ],
+            "properties": {
+                "rendering": { "$ref": "#/definitions/fault_handling" },
+                "ffmpeg": { "$ref": "#/definitions/fault_handling" },
+                "io": { "$ref": "#/definitions/fault_handling" }
+            }
+        }
+    }
+}

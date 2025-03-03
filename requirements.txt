@@ -1,0 +1,16 @@
+typer[all]
+rich>=13.0.0
+python-dotenv>=1.0.0
+jsonschema>=4.17.3
+mitsuba>=3.0.0
+rpds>=0.12.0
+xmltodict>=0.13.0
+xmlschema>=2.3.0
+numpy>=1.24.0
+tqdm>=4.65.0
+imageio>=2.30.0
+imageio[opencv]
+pillow>=10.0.0
+gradio>=3.36.0
+coverage
+tqdm

@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  mitsuba-renderer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mitsuba-rendering:latest
+    container_name: mitsuba-renderer
+    volumes:
+      - ./src:/app/src
+      - ./output:/app/output
+      - ./exports:/app/exports
+      - ./config.json:/app/config.json
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: ["cornell", "--scene-name", "cbox"]
+    # Uncomment below to use a specific command, or override at runtime
+    # command: ["multi", "--scene-name", "multi", "--folder", "/app/exports", "--regex", "^[0-9]+\\.obj$", "--threaded", "--max-workers", "4"]

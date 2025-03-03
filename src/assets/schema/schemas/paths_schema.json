@@ -1,0 +1,53 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Paths Schema",
+    "type": "object",
+    "properties": {
+        "paths": {
+            "type": "object",
+            "properties": {
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "root": {
+                            "type": "string",
+                            "default": "output",
+                            "description": "Root output directory"
+                        },
+                        "folders": {
+                            "type": "object",
+                            "properties": {
+                                "exr": { "type": "string", "default": "exr" },
+                                "png": { "type": "string", "default": "png" },
+                                "video": { "type": "string", "default": "video" },
+                                "gif": { "type": "string", "default": "gif" },
+                                "scenes": { "type": "string", "default": "scenes" },
+                                "meshes": { "type": "string", "default": "meshes" },
+                                "reports": { "type": "string", "default": "reports" },
+                                "logs": { "type": "string", "default": "logs" },
+                                "cache": { "type": "string", "default": "cache" }
+                            },
+                            "required": ["exr", "png", "video", "gif", "scenes", "meshes"]
+                        }
+                    },
+                    "required": ["root", "folders"]
+                },
+                "templates": {
+                    "type": "object",
+                    "properties": {
+                        "scene": {
+                            "type": "string",
+                            "default": "scene_template.xml"
+                        }
+                    },
+                    "required": ["scene"]
+                },
+                "ffmpeg": {
+                    "type": "string",
+                    "default": "ffmpeg"
+                }
+            },
+            "required": ["output", "templates", "ffmpeg"]
+        }
+    }
+}
