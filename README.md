@@ -23,7 +23,7 @@ A Python application for rendering 3D scenes with Mitsuba 3, focusing on batch p
 
 1. Clone this repository:
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/ETSim/MistubaVideo
    cd mitsuba
    ```
 
