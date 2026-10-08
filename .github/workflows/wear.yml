@@ -20,12 +20,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      # ffmpeg encodes the video; Dr.Jit's LLVM backend needs a libLLVM shared library at runtime.
+      # ffmpeg encodes the video; Dr.Jit's LLVM backend needs a libLLVM shared library at runtime. The hosted runner
+      # ships several LLVM versions and an arbitrary one (the oldest) aborted Dr.Jit's JIT ("Cannot select ... fma"),
+      # so pin the library of the distro default that the `llvm` package's llvm-config reports.
       - name: System packages
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg llvm
-          echo "DRJIT_LIBLLVM_PATH=$(find /usr/lib -name 'libLLVM*.so*' | sort | head -n 1)" >> "$GITHUB_ENV"
+          lib="$(ls "$(llvm-config --libdir)"/libLLVM*.so* | sort -V | tail -n 1)"
+          echo "LLVM $(llvm-config --version): $lib"
+          echo "DRJIT_LIBLLVM_PATH=$lib" >> "$GITHUB_ENV"
 
       - name: Install tf-render
         run: pip install "./wear[test]"
