@@ -10,6 +10,7 @@ A Python application for rendering 3D scenes with Mitsuba 3, focusing on batch p
 - Configurable rendering parameters (resolution, samples per pixel)
 - Multi-threaded rendering for improved performance
 - Detailed timing reports and performance statistics
+- Wear videos from TextureFriction recordings (`python main.py wear ...`, see [Wear videos](#wear-videos-from-texturefriction))
 
 ## Installation
 
@@ -68,6 +69,20 @@ Show information about the Mitsuba configuration:
 ```bash
 python main.py info
 ```
+
+## Wear videos from TextureFriction
+
+[`wear/`](wear/README.md) contains `tf-render`. It path-traces a TextureFriction `--record` run (its `FrictionTexture_*.h5`) with the recorded body poses and a per-frame worn material, then adds a UV wear-atlas panel and a worn-area chart and encodes an mp4. Unlike `multi`, it uses the recorded textures and transforms.
+
+```bash
+pip install -e wear                       # adds h5py + tqdm; also installs the `tf-render` command
+python main.py wear inspect path/to/simulation_<ts>
+python main.py wear preview path/to/simulation_<ts>
+python main.py wear render  path/to/simulation_<ts> -q paper --camera orbit --title "Texture-space wear"
+tf-render encode path/to/simulation_<ts>/render_heatmap --fps 15        # re-encode, no re-render
+```
+
+The source of truth is `tools/mitsuba_render` in ETSim/TextureWear. Update this copy with that repo's `scripts/sync-mitsuba-render.ps1`. On Windows, prefer `tf-render`/`python -m tf_render` over `main.py wear` for long renders: they exit cleanly despite the Mitsuba teardown crash.
 
 ## Configuration
 

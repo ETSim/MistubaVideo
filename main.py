@@ -27,6 +27,16 @@ logger = RichLogger.get_logger("mitsuba_app.main")
 # Create Typer app
 app = typer.Typer(help="Command-line interface for Mitsuba 3 renderer")
 
+# TextureFriction wear videos: `python main.py wear render <recording>` (package in wear/, synced from
+# ETSim/TextureWear tools/mitsuba_render). Optional, so the OBJ commands still work without its extra deps (h5py).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "wear"))
+try:
+    from tf_render.cli import app as wear_app
+
+    app.add_typer(wear_app, name="wear", help="Render TextureFriction wear recordings (HDF5) to videos (see wear/README.md)")
+except ImportError as exc:
+    logger.debug(f"wear commands unavailable ({exc}); pip install -e wear")
+
 @app.command("multi")
 @timeit(log_level="debug")
 def render_multi_obj_scene(

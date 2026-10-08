@@ -1,0 +1,53 @@
+# tf-render (wear/): unit tests + a synthetic-recording smoke render on CPU (Mitsuba llvm_ad_rgb).
+# Runs locally under nektos/act too:  act -j wear-smoke
+name: Wear render
+
+on:
+  push:
+    paths: ["wear/**", ".github/workflows/wear.yml"]
+  pull_request:
+    paths: ["wear/**", ".github/workflows/wear.yml"]
+  workflow_dispatch:
+
+jobs:
+  wear-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ffmpeg encodes the video; Dr.Jit's LLVM backend needs a libLLVM shared library at runtime.
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg llvm
+          echo "DRJIT_LIBLLVM_PATH=$(find /usr/lib -name 'libLLVM*.so*' | sort | head -n 1)" >> "$GITHUB_ENV"
+
+      - name: Install tf-render
+        run: pip install "./wear[test]"
+
+      - name: Tests
+        working-directory: wear
+        run: python -m pytest -q
+
+      - name: Smoke render
+        run: |
+          tf-render version
+          tf-render fixture /tmp/rec/FrictionTexture_synthetic.h5
+          tf-render inspect /tmp/rec
+          tf-render render /tmp/rec --out wear-smoke -q preview --res 320x180 --spp 8 --variant llvm \
+            --title "smoke" --title-seconds 1 --hold 0.5 --fps 30
+          ffprobe -v error -select_streams v:0 -count_frames \
+            -show_entries stream=codec_name,width,height,nb_read_frames -of csv=p=0 wear-smoke/wear_heatmap_fixed.mp4
+          test "$(ls wear-smoke/frames | wc -l)" -eq 6
+
+      - name: Upload smoke render
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wear-smoke
+          path: wear-smoke
