@@ -13,6 +13,9 @@ Sources:
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
 import numpy as np
 from PIL import Image
 
@@ -41,16 +44,64 @@ def resize_scalar(arr: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     return _resize(arr.astype(np.float32), size)
 
 
-def _decode_normal(img: np.ndarray | None, size: tuple[int, int]) -> np.ndarray:
+@dataclass(frozen=True)
+class NormalOptions:
+    """Appearance-only normal-map conditioning (normal maps do not feed any physics here).
+
+    recenter_above_deg: a tangent-space normal map should average to +Z over the atlas. When its mean normal is
+    tilted more than this, the map is mis-encoded (``plane_concrete``'s ``test_4mm.png`` averages ~47 degrees off
+    +Z); every texel is then rotated so the mean lands on +Z, keeping the micro-variation. Without it, grazing
+    views see shading normals facing away from the camera, which Mitsuba renders black. <= 0 disables.
+    strength: scales the tangential (x, y) part before renormalizing; 1 = as authored, 0 = flat.
+    """
+
+    recenter_above_deg: float = 5.0
+    strength: float = 1.0
+
+
+def _rotation_to_z(m: np.ndarray) -> np.ndarray:
+    """Rotation matrix taking unit vector ``m`` onto +Z (Rodrigues)."""
+    z = np.array([0.0, 0.0, 1.0])
+    axis = np.cross(m, z)
+    s, c = np.linalg.norm(axis), float(np.dot(m, z))
+    if s < 1e-9:
+        return np.eye(3) if c > 0 else np.diag([1.0, -1.0, -1.0])
+    k = axis / s
+    kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + s * kx + (1.0 - c) * (kx @ kx)
+
+
+def _normalize(n: np.ndarray) -> np.ndarray:
+    norm = np.linalg.norm(n, axis=-1, keepdims=True)
+    out = n / np.maximum(norm, 1e-6)
+    out[norm[..., 0] < 1e-6] = (0.0, 0.0, 1.0)
+    return out
+
+
+def _decode_normal(
+    img: np.ndarray | None,
+    size: tuple[int, int],
+    opts: NormalOptions = NormalOptions(),
+    label: str = "",
+    log: Callable[[str], None] | None = None,
+) -> np.ndarray:
     if img is None:
         out = np.zeros((size[1], size[0], 3), np.float32)
         out[..., 2] = 1.0
         return out
-    n = _resize(img[..., :3], size).astype(np.float32) / 127.5 - 1.0
-    norm = np.linalg.norm(n, axis=-1, keepdims=True)
-    n = n / np.maximum(norm, 1e-6)
-    n[norm[..., 0] < 1e-6] = (0.0, 0.0, 1.0)
-    return n
+    n = _normalize(_resize(img[..., :3], size).astype(np.float32) / 127.5 - 1.0)
+    mean = n.reshape(-1, 3).mean(axis=0)
+    mean /= max(float(np.linalg.norm(mean)), 1e-9)
+    tilt = float(np.degrees(np.arccos(np.clip(mean[2], -1.0, 1.0))))
+    if 0.0 < opts.recenter_above_deg < tilt:
+        n = (n.reshape(-1, 3) @ _rotation_to_z(mean).T).reshape(n.shape).astype(np.float32)
+        if log:
+            log(f"normals   {label}: mean normal tilted {tilt:.0f} deg from +Z (mis-encoded map); recentred")
+    if opts.strength != 1.0:
+        n = n.copy()
+        n[..., :2] *= opts.strength
+        n = _normalize(n)
+    return n.astype(np.float32)
 
 
 def _scalar_map(img: np.ndarray | None, fallback: float, size: tuple[int, int]) -> np.ndarray:
@@ -115,7 +166,12 @@ def texture_size(body: Body, wear_shape: tuple[int, int] | None, max_size: int) 
     return max(1, round(w * s)), max(1, round(h * s))
 
 
-def build_mapsets(body: Body, size: tuple[int, int]) -> tuple[MapSet, MapSet]:
+def build_mapsets(
+    body: Body,
+    size: tuple[int, int],
+    normals: NormalOptions = NormalOptions(),
+    log: Callable[[str], None] | None = None,
+) -> tuple[MapSet, MapSet]:
     """Return (base, worn) material maps for ``body`` at ``size`` = (width, height)."""
     variants = body.variants
     base_v = variants[0] if variants else None
@@ -130,11 +186,11 @@ def build_mapsets(body: Body, size: tuple[int, int]) -> tuple[MapSet, MapSet]:
     def pick(primary: np.ndarray | None, fallback: np.ndarray | None) -> np.ndarray | None:
         return primary if primary is not None else fallback
 
-    def mapset(normal, roughness, height, albedo: np.ndarray, rough_default: float) -> MapSet:
+    def mapset(normal, roughness, height, albedo: np.ndarray, rough_default: float, which: str) -> MapSet:
         return MapSet(
             albedo=np.array(albedo, dtype=np.float32),
             roughness=_scalar_map(roughness, rough_default, size),
-            normal=_decode_normal(normal, size),
+            normal=_decode_normal(normal, size, normals, f"body {body.index} {which}", log),
             height=None if height is None else _scalar_map(height, 0.0, size),
         )
 
@@ -145,8 +201,8 @@ def build_mapsets(body: Body, size: tuple[int, int]) -> tuple[MapSet, MapSet]:
     worn_r = pick(_mtl_image(body, "map_Pr_worn", "L"), worn_v.roughness if worn_v else None)
     worn_h = pick(_mtl_image(body, "map_disp_worn", "L"), worn_v.height if worn_v else None)
 
-    base = mapset(base_n, base_r, base_h, base_albedo, _roughness_fallback(body, base_v))
+    base = mapset(base_n, base_r, base_h, base_albedo, _roughness_fallback(body, base_v), "base")
     worn = mapset(
-        pick(worn_n, base_n), pick(worn_r, base_r), worn_h, worn_albedo, _roughness_fallback(body, worn_v)
+        pick(worn_n, base_n), pick(worn_r, base_r), worn_h, worn_albedo, _roughness_fallback(body, worn_v), "worn"
     )
     return base, worn

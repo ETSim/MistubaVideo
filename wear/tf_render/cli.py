@@ -23,6 +23,7 @@ import typer
 
 from . import __version__
 from .camera import CameraSettings
+from .materials import NormalOptions
 from .pipeline import (
     CONFIG_NAME,
     QUALITY_PRESETS,
@@ -100,6 +101,11 @@ def render(
     spp: int = typer.Option(None, help="Samples per pixel, overrides --quality", rich_help_panel=P_QUALITY),
     max_depth: int = typer.Option(8, help="Maximum path depth", rich_help_panel=P_QUALITY),
     max_texture: int = typer.Option(2048, help="Cap on per-body texture resolution", rich_help_panel=P_QUALITY),
+    normal_strength: float = typer.Option(1.0, help="Scale normal-map detail (1 = as authored, 0 = flat)",
+                                          rich_help_panel=P_QUALITY),
+    normal_recenter: float = typer.Option(5.0, help="Recentre normal maps whose mean tilt exceeds this many "
+                                          "degrees (mis-encoded maps render black at grazing angles; 0 = off)",
+                                          rich_help_panel=P_QUALITY),
     camera: CameraMode = typer.Option(CameraMode.fixed, help="Camera path", rich_help_panel=P_CAMERA),
     follow: int = typer.Option(None, help="Body to track [default: first dynamic body]", rich_help_panel=P_CAMERA),
     azimuth: float = typer.Option(-55.0, help="Degrees around the up axis", rich_help_panel=P_CAMERA),
@@ -164,6 +170,7 @@ def render(
                                       envmap=str(envmap) if envmap else None, ground=ground),  # fmt: skip
             exposure=exposure,
             max_texture=max_texture,
+            normals=NormalOptions(recenter_above_deg=normal_recenter, strength=normal_strength),
             panel=panel,
             panel_bodies=list(panel_body),
             chart=chart,

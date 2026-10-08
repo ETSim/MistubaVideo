@@ -74,6 +74,7 @@ class RenderSettings:
     lighting: scene.LightingSettings = field(default_factory=scene.LightingSettings)
     exposure: float = 0.0
     max_texture: int = 2048
+    normals: materials.NormalOptions = field(default_factory=materials.NormalOptions)
     panel: bool = True
     panel_bodies: list[int] = field(default_factory=list)
     chart: bool = True
@@ -207,6 +208,7 @@ def _signature(s: RenderSettings, rec: Recording, frames: list[Frame]) -> dict:
         "lighting": asdict(s.lighting),
         "exposure": s.exposure,
         "max_texture": s.max_texture,
+        "normals": asdict(s.normals),
         "panel": s.panel,
         "panel_bodies": s.panel_bodies,
         "chart": s.chart,
@@ -293,6 +295,14 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
         signature = _signature(s, rec, selected)
         if s.resume:
             _check_resume(out, signature)
+        else:
+            # A fresh render owns its frame folders: stale frames from an earlier run would otherwise be picked up by
+            # a later --resume once this run's signature is on disk.
+            stale = [f for d in (beauty_dir, comp_dir, exr_dir) if d.is_dir() for f in d.glob("frame_*")]
+            for f in stale:
+                f.unlink()
+            if stale:
+                log(f"output    cleared {len(stale)} frame file(s) from a previous render in {out}")
 
         log(f"recording {rec.path}")
         log(f"scenario  {rec.scenario_name or 'unknown'}: {len(rec.frames)} frames recorded, {len(selected)} selected")
@@ -313,7 +323,7 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
         for body in tqdm(rec.bodies, desc="materials", unit="body", disable=not progress, leave=False):
             wear = rec.texture(first, body.index)
             sizes[body.index] = materials.texture_size(body, None if wear is None else wear.shape, s.max_texture)
-            mapsets[body.index] = materials.build_mapsets(body, sizes[body.index])
+            mapsets[body.index] = materials.build_mapsets(body, sizes[body.index], s.normals, log)
             wear_r = None if wear is None else materials.resize_scalar(wear, sizes[body.index])
             initial[body.index] = body_textures(s.look, wear_r, *mapsets[body.index], blend)
             last_hash[body.index] = _digest(wear)

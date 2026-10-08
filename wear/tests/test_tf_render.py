@@ -89,6 +89,25 @@ def test_blend_endpoints():
     del rng
 
 
+def test_normal_map_recentring():
+    from tf_render.materials import NormalOptions, _decode_normal
+
+    # A map whose every texel is tilted ~47 degrees (like plane_concrete's test_4mm.png) plus small variation.
+    rng = np.random.default_rng(3)
+    tilted = np.array([0.506, 0.506, 0.663]) + rng.normal(0, 0.02, (32, 32, 3))
+    img = np.clip((tilted / np.linalg.norm(tilted, axis=-1, keepdims=True)) * 127.5 + 127.5, 0, 255).astype(np.uint8)
+    raw = _decode_normal(img, (32, 32), NormalOptions(recenter_above_deg=0.0))
+    fixed = _decode_normal(img, (32, 32), NormalOptions())
+    assert raw.reshape(-1, 3).mean(0)[2] < 0.75
+    mean = fixed.reshape(-1, 3).mean(0)
+    assert mean[2] / np.linalg.norm(mean) > 0.999
+    np.testing.assert_allclose(np.linalg.norm(fixed, axis=-1), 1.0, atol=1e-5)
+    # The variation survives: angular spread is preserved by a rotation.
+    assert fixed.reshape(-1, 3).std(0)[:2].mean() == pytest.approx(raw.reshape(-1, 3).std(0)[:2].mean(), rel=0.35)
+    flat = _decode_normal(img, (32, 32), NormalOptions(strength=0.0))
+    np.testing.assert_allclose(flat[..., 2], 1.0, atol=1e-6)
+
+
 def test_heatmap_only_touches_worn_texels():
     albedo = np.full((4, 4, 3), 0.5, np.float32)
     wear = np.zeros((4, 4), np.float32)
