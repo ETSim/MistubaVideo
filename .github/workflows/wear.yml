@@ -49,9 +49,12 @@ jobs:
             -show_entries stream=codec_name,width,height,nb_read_frames -of csv=p=0 wear-smoke/wear_heatmap_fixed.mp4
           test "$(ls wear-smoke/frames | wc -l)" -eq 6
 
+      # Best effort: the org-wide artifact quota can be full, and the job has already passed by this point.
       - name: Upload smoke render
         if: ${{ !env.ACT }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: wear-smoke
           path: wear-smoke
+          retention-days: 3
