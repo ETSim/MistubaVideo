@@ -119,3 +119,13 @@ def test_obj_splits_uv_seams(tmp_path):
                     "f 1/1 2/2 3/3\nf 1/1 3/4 4/3\n")  # fmt: skip
     mesh = load_obj(path)
     assert len(mesh.vertices) == 5
+
+
+def test_compose_frame_drops_side_panels_when_too_small():
+    from mitsuba_video import video
+
+    panel = (video.PanelSource(0, "plane", (0, 0, 8, 8)), np.full((8, 8), 0.5, np.float32))
+    tiny = video.compose_frame(np.zeros((36, 64, 3), np.uint8), [panel], "h", "s")
+    assert tiny.size == (64, 36)  # no room for a legible column: beauty only
+    full = video.compose_frame(np.zeros((180, 320, 3), np.uint8), [panel], "h", "s")
+    assert full.size == (320 + int(180 * 0.42), 180)

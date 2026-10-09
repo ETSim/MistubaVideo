@@ -111,6 +111,7 @@ def _fit(draw: ImageDraw.ImageDraw, text: str, fnt, width: int) -> str:
     return text + "..."
 
 
+MIN_PANEL_WIDTH = 48  # px inside the side column; below this compose_frame omits the panels
 SERIES = (57, 135, 229)  # dataviz reference palette, categorical slot 1 (dark mode); validated vs the dark surface
 GRID = (44, 44, 52)  # one step off the panel surface
 
@@ -234,6 +235,8 @@ def compose_frame(
     big, small = font(max(14, h // 34)), font(max(11, h // 52))
     pad = max(8, h // 60)
     panel_w = int(h * 0.42) if panels else 0
+    if panel_w - 2 * pad < MIN_PANEL_WIDTH:  # thumbnail-size renders: no room for a legible side column
+        panels, panel_w = [], 0
     canvas = Image.new("RGB", (w + panel_w, h), BACKGROUND)
     canvas.paste(Image.fromarray(beauty), (0, 0))
     draw = ImageDraw.Draw(canvas)

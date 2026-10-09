@@ -85,6 +85,11 @@ def _bitmap(arr: np.ndarray, wrap: str = "repeat") -> dict:
     return {"type": "bitmap", "bitmap": mi.Bitmap(arr), "raw": True, "wrap_mode": wrap, "filter_type": "bilinear"}
 
 
+def _assign(params, key: str, arr: np.ndarray) -> None:
+    """Set a mesh buffer using the parameter's own array type (works on scalar and JIT variants alike)."""
+    params[key] = type(params[key])(np.ascontiguousarray(arr).ravel())
+
+
 def encode_maps(maps: MapSet, base_color: np.ndarray | None = None) -> dict[str, np.ndarray]:
     """MapSet -> raw texture arrays (linear base colour, roughness, [0,1]-encoded normal)."""
     return {
@@ -207,12 +212,12 @@ class FieldScene:
                 has_vertex_texcoords=True,
             )
             params = mi.traverse(mesh)
-            params["faces"] = mi.UInt32(body.faces.ravel())
+            _assign(params, "faces", body.faces.astype(np.uint32))
             uv = body.uvs.astype(np.float32).copy()
             uv[:, 1] = 1.0 - uv[:, 1]  # OBJ v-up -> Mitsuba bitmap rows (row 0 = top), as obj's flip_tex_coords
-            params["vertex_texcoords"] = mi.Float(uv.ravel())
-            params["vertex_positions"] = mi.Float((body.vertices * body.scale).astype(np.float32).ravel())
-            params["vertex_normals"] = mi.Float(body.normals.astype(np.float32).ravel())
+            _assign(params, "vertex_texcoords", uv)
+            _assign(params, "vertex_positions", (body.vertices * body.scale).astype(np.float32))
+            _assign(params, "vertex_normals", body.normals.astype(np.float32))
             params.update()
             scene[f"body_{body.index}"] = mesh
             self._local[body.index] = ((body.vertices * body.scale).astype(np.float64), body.normals.astype(np.float64))
@@ -232,7 +237,6 @@ class FieldScene:
             self._texture_keys[body.index] = keys
 
     def set_poses(self, positions: np.ndarray, orientations: np.ndarray) -> None:
-        mi = mitsuba()
         for body in self.bodies:
             if body.index >= len(positions):
                 continue
@@ -240,8 +244,8 @@ class FieldScene:
             local_v, local_n = self._local[body.index]
             world_v = local_v @ rot.T + positions[body.index]
             world_n = local_n @ rot.T
-            self.params[f"body_{body.index}.vertex_positions"] = mi.Float(world_v.astype(np.float32).ravel())
-            self.params[f"body_{body.index}.vertex_normals"] = mi.Float(world_n.astype(np.float32).ravel())
+            _assign(self.params, f"body_{body.index}.vertex_positions", world_v.astype(np.float32))
+            _assign(self.params, f"body_{body.index}.vertex_normals", world_n.astype(np.float32))
 
     def set_textures(self, body_index: int, tex: dict[str, np.ndarray]) -> None:
         for name, key in self._texture_keys[body_index].items():
