@@ -24,7 +24,8 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
+# setuptools MANIFEST at the root only: unanchored, a case-insensitive FS also hid sources/manifest/
+/MANIFEST
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

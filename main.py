@@ -27,15 +27,17 @@ logger = RichLogger.get_logger("mitsuba_app.main")
 # Create Typer app
 app = typer.Typer(help="Command-line interface for Mitsuba 3 renderer")
 
-# TextureFriction wear videos: `python main.py wear render <recording>` (package in wear/, synced from
-# ETSim/TextureWear tools/mitsuba_render). Optional, so the OBJ commands still work without its extra deps (h5py).
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "wear"))
+# Field/wear videos (packages/mitsuba_video): `python main.py field ...` for any source (JSON manifest, ...),
+# `python main.py wear ...` for TextureFriction recordings. Optional, so the OBJ commands work without its deps.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "packages", "mitsuba_video", "src"))
 try:
-    from tf_render.cli import app as wear_app
+    from mitsuba_video.cli import app as field_app
+    from mitsuba_video.sources.texturefriction.cli import app as wear_app
 
-    app.add_typer(wear_app, name="wear", help="Render TextureFriction wear recordings (HDF5) to videos (see wear/README.md)")
+    app.add_typer(field_app, name="field", help="Field videos from any source: manifest, TextureFriction, ... (packages/mitsuba_video)")
+    app.add_typer(wear_app, name="wear", help="Wear videos from TextureFriction recordings (= field --source texturefriction)")
 except ImportError as exc:
-    logger.debug(f"wear commands unavailable ({exc}); pip install -e wear")
+    logger.debug(f"field/wear commands unavailable ({exc}); pip install -e packages/mitsuba_video[texturefriction]")
 
 @app.command("multi")
 @timeit(log_level="debug")
