@@ -116,8 +116,22 @@ def test_tf_render_without_h5py_prints_install_hint(monkeypatch, capsys):
     from mitsuba_video import cli
 
     real_find_spec = importlib.util.find_spec
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None if name == "h5py" else real_find_spec(name, *a))
+
+    def find_spec(name, *args):
+        return None if name == "h5py" else real_find_spec(name, *args)
+
+    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
     with pytest.raises(SystemExit) as exc:
         cli.tf_main(["--help"])
     assert exc.value.code == 2
     assert "mitsuba-video[texturefriction]" in capsys.readouterr().err
+
+
+def test_tf_render_fixture_defaults_to_a_recording(tmp_path):
+    from mitsuba_video.cli import build_app
+
+    tf_app = build_app(default_source="texturefriction", prog="tf-render")
+    h5 = tmp_path / "rec" / "FrictionTexture_synthetic.h5"
+    result = CliRunner().invoke(tf_app, ["fixture", str(h5), "--frames", "2"])
+    assert result.exit_code == 0, result.output
+    assert h5.is_file()

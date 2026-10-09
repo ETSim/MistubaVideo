@@ -84,6 +84,7 @@ def _fail(exc: Exception) -> typer.Exit:
 
 def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> typer.Typer:  # noqa: C901
     """The CLI, with ``default_source`` as the ``--source`` default (``tf-render`` uses "texturefriction")."""
+    fixture_kind = default_source if default_source in ("manifest", "texturefriction") else "manifest"
     app = typer.Typer(
         add_completion=False,
         no_args_is_help=True,
@@ -322,7 +323,7 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
     @app.command()
     def fixture(
         path: Path = typer.Argument(..., help="Output: a folder (manifest) or an .h5 path (texturefriction)"),
-        kind: str = typer.Option("manifest", help="manifest | texturefriction"),
+        kind: str = typer.Option(fixture_kind, help="manifest | texturefriction"),
         frames: int = typer.Option(6, help="Number of frames"),
     ) -> None:
         """Write a tiny synthetic input (plane + sliding box) for tests and smoke renders."""
