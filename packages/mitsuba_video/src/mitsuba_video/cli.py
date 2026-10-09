@@ -449,10 +449,31 @@ def run_main(application: typer.Typer, prog: str, argv: list[str] | None = None)
         code = 1
     sys.stdout.flush()
     sys.stderr.flush()
-    # Mitsuba/Dr.Jit can crash during interpreter teardown (seen with mitsuba 3.6.4 on Windows Python 3.13);
-    # output is flushed, so skip teardown to keep the exit code meaningful.
+    # Mitsuba/Dr.Jit can crash during interpreter teardown (mitsuba 3.6.4 and 3.9.1 on Windows); output is flushed,
+    # so skip teardown to keep the exit code meaningful. On Windows os._exit still runs DLL detach, where the crash
+    # happens (the shell then sees 127), so terminate the process outright there.
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.TerminateProcess.argtypes = (ctypes.c_void_p, ctypes.c_uint)
+        kernel32.TerminateProcess(kernel32.GetCurrentProcess(), code & 0xFFFFFFFF)
     os._exit(code)
 
 
 def main(argv: list[str] | None = None) -> None:
     run_main(app, "mitsuba-video", argv)
+
+
+def tf_main(argv: list[str] | None = None) -> None:
+    """``tf-render`` console entry: checks the optional h5py dependency before importing the TextureFriction source."""
+    import importlib.util
+
+    if importlib.util.find_spec("h5py") is None:
+        print('tf-render reads TextureFriction HDF5 recordings and needs h5py: '
+              'pip install "mitsuba-video[texturefriction]"', file=sys.stderr)  # fmt: skip
+        sys.exit(2)
+    from .sources.texturefriction.cli import main as texturefriction_main
+
+    texturefriction_main(argv)

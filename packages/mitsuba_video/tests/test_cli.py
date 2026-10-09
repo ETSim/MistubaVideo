@@ -110,3 +110,14 @@ def test_render_smoke_tf_alias(tf_recording, tmp_path):
     config = json.loads((out / pipeline.CONFIG_NAME).read_text())
     assert config["video_stem"] == "wear_heatmap_fixed" and config["signature"]["source_kind"] == "texturefriction"
     assert (out / "worn_area.csv").is_file()
+
+
+def test_tf_render_without_h5py_prints_install_hint(monkeypatch, capsys):
+    from mitsuba_video import cli
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a: None if name == "h5py" else real_find_spec(name, *a))
+    with pytest.raises(SystemExit) as exc:
+        cli.tf_main(["--help"])
+    assert exc.value.code == 2
+    assert "mitsuba-video[texturefriction]" in capsys.readouterr().err

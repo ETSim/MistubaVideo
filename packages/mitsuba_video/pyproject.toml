@@ -24,7 +24,7 @@ test = ["pytest>=7", "h5py>=3"]
 
 [project.scripts]
 mitsuba-video = "mitsuba_video.cli:main"
-tf-render = "mitsuba_video.sources.texturefriction.cli:main"
+tf-render = "mitsuba_video.cli:tf_main"
 
 [project.entry-points."mitsuba_video.sources"]
 texturefriction = "mitsuba_video.sources.texturefriction:TextureFrictionSource"
