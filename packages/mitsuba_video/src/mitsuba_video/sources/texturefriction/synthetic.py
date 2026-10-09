@@ -4,7 +4,7 @@ It reproduces only the schema ``recording.Recording`` reads, mirroring ``Simulat
 ``metadata/bodies/body_k/{mesh,mtl,material_atlas}`` (atlas images GL-flipped, as ``OBJLoader`` stores them),
 ``frames/frame_i/{positions,orientations,time,textures/body_k/wear}`` and the ``scale`` body attribute.
 
-    python tools/tf_render/synthetic.py out_dir/FrictionTexture_synthetic.h5
+    mitsuba-video fixture --kind texturefriction out_dir/FrictionTexture_synthetic.h5
 """
 
 from __future__ import annotations

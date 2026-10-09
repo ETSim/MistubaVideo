@@ -1,21 +1,24 @@
-"""NumPy port of the flat -> worn appearance blend (``WearAtlasBake`` in ``src/MaterialAtlas.cpp``).
+"""Field-driven material blend: base -> affected ("worn") maps, weighted per texel by the field value.
 
-The C++ bake runs once at the end of a recording. Porting it here lets every rendered frame show the worn
-appearance that matches that frame's wear texture. The math mirrors the C++ helpers one to one:
+Ported from TextureFriction's ``WearAtlasBake`` (``src/MaterialAtlas.cpp``), which bakes the flat -> worn
+appearance once at the end of a recording; here every rendered frame gets its own blend. The math mirrors the C++
+helpers one to one:
 
 * ``wear_remap_t``      <- ``wearRemapT`` (Hermite ramp between edge0/edge1 with tension/bias tangents)
 * ``height_blend_t``    <- ``wearHeightBlendT``
 * ``slerp_normals``     <- ``slerpGeodesic`` (2-variant normal blend)
 
-Texels with ``wear <= 1e-6`` keep the base maps exactly, as in the C++ bake. Direction-oriented normal rotation is
-not ported: the recorded direction PNGs are an HSV preview, not the raw RG direction encoding it needs.
+Texels with a field value <= 1e-6 keep the base maps exactly, as in the C++ bake. The defaults are
+TextureFriction's (``SimViewer.h``); other sources pass their own ``BlendParams``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import numpy as np
+
+from .maps import MapSet
 
 WEAR_EPS = 1e-6
 
@@ -30,25 +33,6 @@ class BlendParams:
     bias: float = 0.0
     height_strength: float = 0.6
     height_contrast: float = 1.25
-
-
-@dataclass
-class MapSet:
-    """Per-body material maps at one shared resolution, image convention (row 0 = V = 1)."""
-
-    albedo: np.ndarray  # HxWx3 float32, sRGB-encoded [0, 1]
-    roughness: np.ndarray  # HxW float32 [0, 1]
-    normal: np.ndarray  # HxWx3 float32 unit tangent-space vectors
-    height: np.ndarray | None  # HxW float32 [0, 1]
-
-    def copy(self) -> MapSet:
-        return replace(
-            self,
-            albedo=self.albedo.copy(),
-            roughness=self.roughness.copy(),
-            normal=self.normal.copy(),
-            height=None if self.height is None else self.height.copy(),
-        )
 
 
 def hermite_tangents(tension: float, bias: float) -> tuple[float, float]:
@@ -121,51 +105,3 @@ def blend_maps(wear: np.ndarray, base: MapSet, worn: MapSet, p: BlendParams = Bl
     if out.height is not None and worn.height is not None:
         out.height[mask] = (1.0 - t) * base.height[mask] + t * worn.height[mask]
     return out
-
-
-# Inferno (matplotlib), 11 stops. Used only for the labelled "normalized wear" preview colouring.
-_INFERNO = np.array(
-    [
-        [0.001462, 0.000466, 0.013866],
-        [0.087411, 0.044556, 0.224813],
-        [0.258234, 0.038571, 0.406485],
-        [0.416331, 0.090203, 0.432943],
-        [0.578304, 0.148039, 0.404411],
-        [0.735683, 0.215906, 0.330245],
-        [0.865006, 0.316822, 0.226055],
-        [0.954506, 0.468744, 0.099874],
-        [0.987622, 0.645320, 0.039886],
-        [0.964394, 0.843848, 0.273391],
-        [0.988362, 0.998364, 0.644924],
-    ],
-    dtype=np.float32,
-)
-
-
-def colormap(values: np.ndarray, lo: float = 0.0, hi: float = 1.0, floor: float = 0.15) -> np.ndarray:
-    """Map ``values`` linearly onto inferno (sRGB-encoded). ``floor`` skips the near-black start of the map."""
-    x = np.clip((np.asarray(values, dtype=np.float32) - lo) / max(hi - lo, 1e-12), 0.0, 1.0)
-    x = floor + (1.0 - floor) * x
-    pos = x * (len(_INFERNO) - 1)
-    i0 = np.clip(np.floor(pos).astype(np.int32), 0, len(_INFERNO) - 2)
-    f = (pos - i0)[..., None]
-    return (1.0 - f) * _INFERNO[i0] + f * _INFERNO[i0 + 1]
-
-
-def heatmap_albedo(albedo: np.ndarray, wear: np.ndarray, opacity: float = 0.9) -> np.ndarray:
-    """Overlay the wear colormap on ``albedo`` wherever wear was written (> one 8-bit step)."""
-    out = albedo.copy()
-    mask = wear > (0.5 / 255.0)
-    if mask.any():
-        out[mask] = (1.0 - opacity) * albedo[mask] + opacity * colormap(wear[mask])
-    return out
-
-
-def srgb_to_linear(c: np.ndarray) -> np.ndarray:
-    c = np.clip(c, 0.0, 1.0)
-    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4).astype(np.float32)
-
-
-def linear_to_srgb(c: np.ndarray) -> np.ndarray:
-    c = np.clip(c, 0.0, 1.0)
-    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1.0 / 2.4) - 0.055).astype(np.float32)

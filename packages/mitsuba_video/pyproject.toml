@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mitsuba-video"
+version = "0.3.0"
+description = "Path-traced Mitsuba 3 videos of rigid bodies whose UV atlases carry a per-texel field (wear, damage, temperature...)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "mitsuba>=3.5,<3.10",
+    "numpy>=1.24",
+    "Pillow>=10.1",
+    "typer>=0.9",
+    "tqdm>=4.60",
+    "jsonschema>=4",
+]
+
+[project.optional-dependencies]
+texturefriction = ["h5py>=3"]
+test = ["pytest>=7", "h5py>=3"]
+
+[project.scripts]
+mitsuba-video = "mitsuba_video.cli:main"
+tf-render = "mitsuba_video.sources.texturefriction.cli:main"
+
+[project.entry-points."mitsuba_video.sources"]
+texturefriction = "mitsuba_video.sources.texturefriction:TextureFrictionSource"
+manifest = "mitsuba_video.sources.manifest:ManifestSource"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"mitsuba_video.sources.manifest" = ["schema/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"

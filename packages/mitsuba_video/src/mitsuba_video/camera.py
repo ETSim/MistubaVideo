@@ -1,4 +1,4 @@
-"""Camera paths for the wear video: fixed framing, tracking a body, or orbiting the scene.
+"""Camera paths: fixed framing, tracking a body, or orbiting the scene.
 
 All framing is derived from the recorded trajectories, so a scene at any physical scale (a 0.0025-scaled tray or a
 4 m plane) is framed without hand-tuned distances.
@@ -11,7 +11,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .recording import Body, Recording, quaternion_to_matrix
+from .model import Body
+from .source import Source
+from .transforms import quaternion_to_matrix
 
 UP_AXES = {"x": 0, "y": 1, "z": 2}
 
@@ -52,7 +54,7 @@ def world_corners(body: Body, position: np.ndarray, q_wxyz: np.ndarray) -> np.nd
     return corners @ quaternion_to_matrix(q_wxyz).T + position
 
 
-def trajectory_bounds(rec: Recording, frames, bodies: list[Body]) -> tuple[np.ndarray, np.ndarray]:
+def trajectory_bounds(rec: Source, frames, bodies: list[Body]) -> tuple[np.ndarray, np.ndarray]:
     pts = []
     for frame in frames:
         pos, quat = rec.pose(frame)
@@ -63,7 +65,7 @@ def trajectory_bounds(rec: Recording, frames, bodies: list[Body]) -> tuple[np.nd
     return allpts.min(axis=0), allpts.max(axis=0)
 
 
-def scene_bounds(rec: Recording, frames) -> tuple[np.ndarray, np.ndarray]:
+def scene_bounds(rec: Source, frames) -> tuple[np.ndarray, np.ndarray]:
     return trajectory_bounds(rec, frames, rec.bodies)
 
 
@@ -90,7 +92,7 @@ def _smooth(points: np.ndarray, window: int) -> np.ndarray:
     return np.stack([np.convolve(padded[:, k], kernel, mode="valid") for k in range(3)], axis=1)
 
 
-def camera_path(rec: Recording, frames, settings: CameraSettings, aspect: float) -> list[CameraPose]:
+def camera_path(rec: Source, frames, settings: CameraSettings, aspect: float) -> list[CameraPose]:
     """One pose per frame in ``frames``. Framing uses the whole recording, so a preview of a few frames is shot
     exactly like the full render."""
     up = up_basis(settings.up)[0]

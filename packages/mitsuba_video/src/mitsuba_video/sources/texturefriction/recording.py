@@ -21,6 +21,9 @@ import h5py
 import numpy as np
 from PIL import Image
 
+from ...model import Frame
+from ...mtl import mtl_get, parse_mtl_text
+
 Image.MAX_IMAGE_PIXELS = None
 
 ASSET_ROOT_ENV = "TF_ASSET_ROOT"
@@ -40,32 +43,6 @@ def decode_png(dataset) -> np.ndarray:
         return np.asarray(img)
 
 
-def parse_mtl_text(text: str) -> dict[str, dict[str, object]]:
-    """Map ``newmtl`` names to their scalar and ``map_*`` entries (last value wins, keys case-preserved)."""
-    materials: dict[str, dict[str, object]] = {}
-    current: dict[str, object] | None = None
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        key, _, rest = line.partition(" ")
-        rest = rest.strip()
-        if key == "newmtl":
-            current = materials.setdefault(rest, {})
-        elif current is not None and rest:
-            if key.startswith("map_"):
-                # Texture options (-bm 1.0 ...) precede the filename; the filename is the last token.
-                current[key] = rest.split()[-1]
-            else:
-                values = rest.split()
-                try:
-                    floats = [float(v) for v in values]
-                    current[key] = floats[0] if len(floats) == 1 else floats
-                except ValueError:
-                    current[key] = rest
-    return materials
-
-
 @dataclass
 class MaterialVariant:
     """One entry of a body's ``material_atlas`` (index 0 = unworn base)."""
@@ -79,7 +56,7 @@ class MaterialVariant:
 
 
 @dataclass
-class Body:
+class RecordedBody:
     index: int
     name: str
     vertices: np.ndarray  # (N, 3) float32, mesh-local units (before scale)
@@ -137,30 +114,11 @@ class Body:
     def resolve_texture(self, key: str) -> Path | None:
         """Resolve an ``.mtl`` ``map_*`` entry to an existing file, or None."""
         # OBJLoader matches map_* keys case-sensitively but the assets mix spellings (map_Bump_Worn, map_Pr_worn).
-        rel = next((v for k, v in self.mtl.items() if k.lower() == key.lower()), None)
+        rel = mtl_get(self.mtl, key)
         if not isinstance(rel, str) or self.mtl_dir is None:
             return None
         path = (self.mtl_dir / rel.replace("\\", "/")).resolve()
         return path if path.is_file() else None
-
-    def area_per_texel(self, atlas_shape: tuple[int, int]) -> float:
-        """World area (scaled mesh units squared) covered by one texel of an ``atlas_shape`` texture.
-
-        Assumes uniform texel density: total triangle area divided by the UV area those triangles cover. Exact for
-        planar boxes and planes; an average for meshes with uneven UV stretch.
-        """
-        tri = (self.vertices * self.scale)[self.faces.astype(np.int64)]
-        world = 0.5 * np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1).sum()
-        uv = self.uvs[self.faces.astype(np.int64)]
-        e1, e2 = uv[:, 1] - uv[:, 0], uv[:, 2] - uv[:, 0]
-        uv_area = 0.5 * np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).sum()
-        h, w = atlas_shape
-        return float(world / max(uv_area * w * h, 1e-12))
-
-    @cached_property
-    def local_bounds(self) -> tuple[np.ndarray, np.ndarray]:
-        v = self.vertices * self.scale
-        return v.min(axis=0), v.max(axis=0)
 
 
 def _resolve_asset_dir(mesh_filename: str, roots: list[Path]) -> Path | None:
@@ -196,14 +154,6 @@ def default_asset_roots(recording_dir: Path, extra: list[Path] | None = None) ->
     return roots
 
 
-@dataclass
-class Frame:
-    key: str
-    index: int
-    time: float
-    position: int  # recording order, matches textures/body_N/<kind>/NNNN.png on disk
-
-
 class Recording:
     """Lazy reader over one ``FrictionTexture_*.h5`` file."""
 
@@ -225,10 +175,11 @@ class Recording:
         self.file = h5py.File(source, "r")
         self._scale_overrides = scale_overrides or {}
         self.asset_roots = default_asset_roots(self.root, asset_roots)
+        self.skipped: list[str] = []
         self.bodies = self._read_bodies()
         self.frames = self._read_frames()
 
-    def body(self, index: int) -> Body:
+    def body(self, index: int) -> RecordedBody:
         return next(b for b in self.bodies if b.index == index)
 
     def close(self) -> None:
@@ -246,7 +197,7 @@ class Recording:
         name = scene.attrs.get("scenario_name", "") if scene is not None else ""
         return name.decode(errors="replace") if isinstance(name, bytes) else str(name)
 
-    def _read_bodies(self) -> list[Body]:
+    def _read_bodies(self) -> list[RecordedBody]:
         meta = self.file["metadata"]
         fixed = np.zeros(0, dtype=bool)
         if "scene/initial_conditions/fixed" in meta:
@@ -259,7 +210,7 @@ class Recording:
             g = group[key]
             index = int(key.split("_")[-1])
             if "mesh/vertices" not in g:
-                print(f"[render] body {index}: no embedded mesh, skipped")
+                self.skipped.append(f"body {index}: no embedded mesh")
                 continue
             vertices = np.asarray(g["mesh/vertices"][()], dtype=np.float32)
             normals = (
@@ -292,7 +243,7 @@ class Recording:
 
             mesh_attrs = g["mesh"].attrs
             bodies.append(
-                Body(
+                RecordedBody(
                     index=index,
                     name=str(mesh_attrs.get("mesh_name", key)),
                     vertices=vertices,
@@ -354,27 +305,3 @@ class Recording:
         if arr.ndim == 3:
             arr = arr[..., 0]
         return arr.astype(np.float32) / 255.0
-
-
-def quaternion_to_matrix(q_wxyz: np.ndarray) -> np.ndarray:
-    """Rotation matrix for a (w, x, y, z) quaternion (Eigen storage order used by the serializer)."""
-    q = np.asarray(q_wxyz, dtype=np.float64)
-    n = np.linalg.norm(q)
-    if n < 1e-12:
-        return np.eye(3)
-    w, x, y, z = q / n
-    return np.array(
-        [
-            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-        ]
-    )
-
-
-def body_world_transform(position: np.ndarray, q_wxyz: np.ndarray, scale: float) -> np.ndarray:
-    """4x4 model matrix ``T(x) * R(q) * S(scale)``, matching ``RigidBodyRendererDetail`` and ``RigidBody``."""
-    m = np.eye(4)
-    m[:3, :3] = quaternion_to_matrix(q_wxyz) * scale
-    m[:3, 3] = position
-    return m

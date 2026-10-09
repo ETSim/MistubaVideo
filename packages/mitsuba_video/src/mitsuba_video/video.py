@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from .wear_blend import colormap, linear_to_srgb
+from .color import colormap, linear_to_srgb
 
 BACKGROUND = (18, 18, 22)
 TEXT = (232, 232, 236)
@@ -47,12 +47,14 @@ class PanelSource:
     roi: tuple[int, int, int, int]  # (x0, y0, x1, y1) in atlas pixels, crop applied to every frame
 
 
-def wear_roi(wear: np.ndarray | None, margin: float = 0.12) -> tuple[int, int, int, int]:
+def wear_roi(
+    wear: np.ndarray | None, margin: float = 0.12, threshold: float = 0.5 / 255.0
+) -> tuple[int, int, int, int]:
     """Bounding box of written wear (> one 8-bit step), padded and squared; full atlas when nothing is worn."""
     if wear is None:
         return (0, 0, 1, 1)
     h, w = wear.shape
-    ys, xs = np.nonzero(wear > (0.5 / 255.0))
+    ys, xs = np.nonzero(wear > threshold)
     if len(xs) == 0:
         return (0, 0, w, h)
     x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
@@ -75,7 +77,13 @@ def _max_pool(arr: np.ndarray, size: int) -> np.ndarray:
     return padded.reshape(padded.shape[0] // factor, factor, padded.shape[1] // factor, factor).max(axis=(1, 3))
 
 
-def wear_panel_image(wear: np.ndarray | None, roi: tuple[int, int, int, int], size: int) -> Image.Image:
+def wear_panel_image(
+    wear: np.ndarray | None,
+    roi: tuple[int, int, int, int],
+    size: int,
+    hi: float = 1.0,
+    threshold: float = 0.5 / 255.0,
+) -> Image.Image:
     """Wear atlas crop as inferno over dark grey (unworn texels stay grey, so the footprint reads clearly)."""
     if wear is None:
         return Image.new("RGB", (size, size), (40, 40, 46))
@@ -83,8 +91,8 @@ def wear_panel_image(wear: np.ndarray | None, roi: tuple[int, int, int, int], si
     crop = _max_pool(wear[y0:y1, x0:x1], size)
     rgb = np.empty(crop.shape + (3,), np.float32)
     rgb[:] = np.float32([40, 40, 46]) / 255.0
-    mask = crop > (0.5 / 255.0)
-    rgb[mask] = colormap(crop[mask])
+    mask = crop > threshold
+    rgb[mask] = colormap(crop[mask], hi=hi)
     img = Image.fromarray((rgb * 255.0 + 0.5).astype(np.uint8))
     return img.resize((size, size), Image.Resampling.NEAREST)
 
@@ -214,6 +222,9 @@ def compose_frame(
     header: str,
     subheader: str,
     chart: tuple[AreaSeries, int] | None = None,
+    display_max: float = 1.0,
+    field_label: str = "field, normalized",
+    field_threshold: float = 0.5 / 255.0,
 ) -> Image.Image:
     """Beauty render with a header, plus a right-hand column of UV wear-atlas panels when ``panels`` is set.
 
@@ -247,19 +258,23 @@ def compose_frame(
     for source, wear in panels:
         draw.text((x, y), _fit(draw, source.title, small, inner), font=small, fill=TEXT)
         y += small.size + pad // 2
-        canvas.paste(wear_panel_image(wear, source.roi, side), (x + (inner - side) // 2, y))
+        canvas.paste(wear_panel_image(wear, source.roi, side, display_max, field_threshold), (x + (inner - side) // 2, y))
         y += side + pad
     if chart:
         series, index = chart
         canvas.paste(area_chart(series, index, inner, chart_h - pad), (x, h - footer - chart_h))
 
     yb = h - footer + pad
-    draw.text((x, yb), _fit(draw, "wear, normalized (1.0 = clamp)", small, inner), font=small, fill=MUTED)
+    caption = field_label.split(",")[0]
+    label = (field_label if display_max >= 1.0
+             else f"{caption}, display range 0-{display_max:g} (preview)")  # fmt: skip
+    draw.text((x, yb), _fit(draw, label, small, inner), font=small, fill=MUTED)
     yb += small.size + 4
     canvas.paste(colorbar(inner, bar_h), (x, yb))
     yb += bar_h + 2
     draw.text((x, yb), "0", font=small, fill=MUTED)
-    draw.text((x + inner - draw.textlength("1", font=small), yb), "1", font=small, fill=MUTED)
+    top = f"{display_max:g}"
+    draw.text((x + inner - draw.textlength(top, font=small), yb), top, font=small, fill=MUTED)
     return canvas
 
 

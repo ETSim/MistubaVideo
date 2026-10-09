@@ -12,8 +12,10 @@ from dataclasses import dataclass
 import numpy as np
 
 from .camera import CameraPose, up_basis
-from .recording import Body, quaternion_to_matrix
-from .wear_blend import MapSet, srgb_to_linear
+from .color import srgb_to_linear
+from .maps import MapSet
+from .model import Body
+from .transforms import quaternion_to_matrix
 
 _mi = None
 
@@ -92,7 +94,7 @@ def encode_maps(maps: MapSet, base_color: np.ndarray | None = None) -> dict[str,
     }
 
 
-class WearScene:
+class FieldScene:
     def __init__(
         self,
         bodies: list[Body],
@@ -257,6 +259,9 @@ class WearScene:
         self.params.update()
         img = mi.render(self.scene, spp=spp, seed=seed)
         return np.asarray(img, dtype=np.float32)[..., :3]
+
+
+WearScene = FieldScene  # former name
 
 
 class Denoiser:
