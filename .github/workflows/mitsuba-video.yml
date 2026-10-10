@@ -1,0 +1,93 @@
+# mitsuba-video (packages/mitsuba_video): tests, smoke renders for the manifest and TextureFriction sources, and an
+# install check from this exact commit (how downstream projects pin it). Runs locally under act:  act -j linux
+name: mitsuba-video
+
+on:
+  push:
+    paths: ["packages/mitsuba_video/**", ".github/workflows/mitsuba-video.yml"]
+  pull_request:
+    paths: ["packages/mitsuba_video/**", ".github/workflows/mitsuba-video.yml"]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ffmpeg encodes the video; Dr.Jit's LLVM backend needs a libLLVM shared library at runtime. The hosted runner
+      # ships several LLVM versions and an arbitrary one (the oldest) aborted Dr.Jit's JIT ("Cannot select ... fma"),
+      # so pin the library of the distro default that the `llvm` package's llvm-config reports.
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg llvm
+          lib="$(ls "$(llvm-config --libdir)"/libLLVM*.so* | sort -V | tail -n 1)"
+          echo "LLVM $(llvm-config --version): $lib"
+          echo "DRJIT_LIBLLVM_PATH=$lib" >> "$GITHUB_ENV"
+
+      - name: Install
+        run: pip install "./packages/mitsuba_video[test]"
+
+      - name: Tests
+        working-directory: packages/mitsuba_video
+        run: python -m pytest -q
+
+      - name: Smoke renders
+        run: |
+          mitsuba-video version
+          mitsuba-video sources
+          mitsuba-video fixture /tmp/man --kind manifest
+          mitsuba-video validate /tmp/man
+          mitsuba-video render /tmp/man --out smoke/manifest -q preview --res 320x180 --spp 8 --variant llvm \
+            --title "smoke" --title-seconds 1 --hold 0.5 --fps 30
+          mitsuba-video fixture /tmp/tf/FrictionTexture_synthetic.h5 --kind texturefriction
+          tf-render inspect /tmp/tf
+          tf-render render /tmp/tf --out smoke/tf -q preview --res 320x180 --spp 8 --variant llvm --no-encode
+          ffprobe -v error -select_streams v:0 -count_frames \
+            -show_entries stream=codec_name,width,height,nb_read_frames -of csv=p=0 smoke/manifest/wear_heatmap_fixed.mp4
+          test "$(ls smoke/manifest/frames | wc -l)" -eq 6
+          test "$(ls smoke/tf/frames | wc -l)" -eq 6
+
+      - name: Install from this commit (downstream pin)
+        if: ${{ !env.ACT }}
+        run: |
+          python -m venv /tmp/pin
+          /tmp/pin/bin/pip install --quiet \
+            "mitsuba-video[texturefriction] @ git+https://github.com/${{ github.repository }}@${{ github.sha }}#subdirectory=packages/mitsuba_video"
+          /tmp/pin/bin/tf-render version
+
+      # Best effort: the org-wide artifact quota can be full, and the job has already passed by this point.
+      - name: Upload smoke renders
+        if: ${{ !env.ACT }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: mitsuba-video-smoke
+          path: smoke
+          retention-days: 3
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install "./packages/mitsuba_video[test]"
+      - name: Tests
+        working-directory: packages/mitsuba_video
+        run: python -m pytest -q -k "not render_smoke"
+      - name: Scalar smoke render
+        shell: bash
+        run: |
+          mitsuba-video fixture "$RUNNER_TEMP/man" --kind manifest --frames 2
+          mitsuba-video render "$RUNNER_TEMP/man" --out "$RUNNER_TEMP/out" --res 64x36 --spp 2 --variant scalar --no-encode
+          test "$(ls "$RUNNER_TEMP/out/frames" | wc -l)" -eq 2

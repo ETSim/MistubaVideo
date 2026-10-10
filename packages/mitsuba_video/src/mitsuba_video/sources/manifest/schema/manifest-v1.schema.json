@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ETSim/MistubaVideo/packages/mitsuba_video/manifest-v1.schema.json",
+  "title": "mitsuba-video manifest v1",
+  "description": "Rigid bodies with per-frame poses and per-texel scalar fields in their UV atlases. Paths are relative to the manifest file.",
+  "type": "object",
+  "required": ["format", "version", "bodies", "fields"],
+  "additionalProperties": false,
+  "properties": {
+    "format": {"const": "mitsuba-video.manifest"},
+    "version": {"const": 1},
+    "name": {"type": "string"},
+    "units": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"length": {"type": "string"}, "time": {"type": "string"}}
+    },
+    "up_axis": {"enum": ["x", "y", "z"]},
+    "travel_label": {"type": "string"},
+    "fields": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "label": {"type": "string"},
+          "threshold": {"type": "number", "minimum": 0},
+          "range": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+          "video_prefix": {"type": "string"},
+          "area_title": {"type": "string"}
+        }
+      }
+    },
+    "primary_field": {"type": "string"},
+    "blend": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "edge0": {"type": "number"}, "edge1": {"type": "number"}, "tension": {"type": "number"},
+        "bias": {"type": "number"}, "height_strength": {"type": "number"}, "height_contrast": {"type": "number"}
+      }
+    },
+    "bodies": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "mesh"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "integer", "minimum": 0},
+          "name": {"type": "string"},
+          "mesh": {"type": "string"},
+          "scale": {"type": "number", "exclusiveMinimum": 0},
+          "fixed": {"type": "boolean"},
+          "material": {"$ref": "#/$defs/material"}
+        }
+      }
+    },
+    "frames_file": {"type": "string"},
+    "frames": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["time"],
+        "additionalProperties": false,
+        "properties": {
+          "index": {"type": "integer"},
+          "time": {"type": "number"},
+          "poses": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["position", "orientation"],
+              "additionalProperties": false,
+              "properties": {
+                "position": {"$ref": "#/$defs/vec3"},
+                "orientation": {"$ref": "#/$defs/quat"}
+              }
+            }
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {"type": "object", "additionalProperties": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "field_pattern": {"type": "string"}
+  },
+  "oneOf": [{"required": ["frames_file"]}, {"required": ["frames"]}],
+  "$defs": {
+    "vec3": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+    "quat": {
+      "description": "(w, x, y, z)",
+      "type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4
+    },
+    "colourOrMap": {"oneOf": [{"$ref": "#/$defs/vec3"}, {"type": "string"}]},
+    "scalarOrMap": {"oneOf": [{"type": "number"}, {"type": "string"}]},
+    "appearance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "albedo": {"$ref": "#/$defs/colourOrMap"},
+        "roughness": {"$ref": "#/$defs/scalarOrMap"},
+        "normal": {"type": "string"},
+        "height": {"type": "string"},
+        "metallic": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "material": {
+      "oneOf": [
+        {
+          "type": "object", "required": ["mtl"], "additionalProperties": false,
+          "properties": {"mtl": {"type": "string"}, "name": {"type": "string"}}
+        },
+        {
+          "type": "object", "required": ["base"], "additionalProperties": false,
+          "properties": {"base": {"$ref": "#/$defs/appearance"}, "worn": {"$ref": "#/$defs/appearance"}}
+        }
+      ]
+    }
+  }
+}

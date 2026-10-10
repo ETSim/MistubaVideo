@@ -10,6 +10,7 @@ A Python application for rendering 3D scenes with Mitsuba 3, focusing on batch p
 - Configurable rendering parameters (resolution, samples per pixel)
 - Multi-threaded rendering for improved performance
 - Detailed timing reports and performance statistics
+- Field and wear videos of moving bodies from any project (`mitsuba-video`, see [Field and wear videos](#field-and-wear-videos-mitsuba-video))
 
 ## Installation
 
@@ -68,6 +69,29 @@ Show information about the Mitsuba configuration:
 ```bash
 python main.py info
 ```
+
+## Field and wear videos (`mitsuba-video`)
+
+[`packages/mitsuba_video`](packages/mitsuba_video/README.md) is a generic renderer for rigid bodies whose UV atlases carry a per-texel field (wear, damage, temperature...). For each frame it:
+
+- path-traces the bodies at their recorded poses, with a field-driven material blend and heatmap;
+- adds a UV atlas panel and a covered-area chart.
+
+It then encodes an mp4. Unlike `multi`, it uses textures and per-frame transforms.
+
+Inputs come from pluggable sources:
+
+- **`manifest`:** a versioned JSON any project can write with `ManifestWriter`.
+- **`texturefriction`:** TextureFriction `--record` runs.
+
+```bash
+pip install -e "packages/mitsuba_video[texturefriction]"     # installs `mitsuba-video` and `tf-render`
+mitsuba-video fixture demo && mitsuba-video render demo -q preview
+python main.py field render path/to/manifest.json -q paper --camera orbit --title "..."
+python main.py wear  render path/to/simulation_<ts> -q paper   # TextureFriction recordings
+```
+
+TextureFriction (ETSim/TextureWear) installs this package pinned by commit (`tools/render-requirements.txt` there). On Windows, prefer `mitsuba-video` / `tf-render` over `main.py field|wear` for long renders: they exit cleanly despite Mitsuba's teardown crash.
 
 ## Configuration
 
