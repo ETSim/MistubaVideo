@@ -80,12 +80,30 @@ Implement the `Source` protocol (`src/mitsuba_video/source.py`). It must provide
 - `probe`, `open`, `pose`, `field`, `describe`, `close`;
 - the attributes `bodies`, `frames`, `fields` and `primary_field`.
 
-Each `Body` carries a `MaterialProvider` that builds `(base, worn)` maps at a requested size. Register the class:
+Each `Body` carries a `MaterialProvider` that builds `(base, worn)` maps at a requested size. A material with more
+than two stages, or with channels that do not all change, can instead define `build_stack` and return a
+`VariantStack` (`blend.py`): 1, 2 or 4 slices per channel, unworn first. Register the class:
 
 ```toml
 [project.entry-points."mitsuba_video.sources"]
 mysim = "mysim_video:MySimSource"
 ```
+
+## The material blend
+
+`blend.py` ports TextureFriction's viewer shader (`basicShader.frag`, `basicCommon.glsl`). Per texel, the field goes
+through a Hermite ramp between two edges, can be reshaped by the height difference between the unworn and worn
+slices, and then selects the slices:
+
+- two slices: albedo and roughness are mixed linearly, normals follow the great circle between the two;
+- four slices: the ramp is cut at 1/3 and 2/3, so at most two neighbouring stages mix at any texel (normals are
+  averaged on the sphere around the heavier one);
+- one slice: the channel does not change.
+
+The `texturefriction` source takes the slices from the recording's material atlas the way the viewer packs its
+atlases, and turns on the viewer's presentation terms (`VIEWER_BLEND`): a light blur of the field, a feathered start,
+worn normals that keep 30% of their detail, and a roughness floor. The settings the viewer had while recording
+(`metadata/scene/variant_blend`) override the defaults. Other sources get the plain blend unless they set `blend`.
 
 ## Outputs
 
@@ -102,7 +120,7 @@ Each render folder holds:
 
 `pytest` (in this folder) covers:
 
-- transforms and the blend math;
+- transforms and the blend math, including the four-stage weights and the viewer's channel choice;
 - the OBJ and MTL readers;
 - the manifest schema and writer;
 - TextureFriction → manifest parity;
