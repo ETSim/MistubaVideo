@@ -85,6 +85,7 @@ class RenderSettings:
     display: FieldDisplay = field(default_factory=FieldDisplay)
     panel: bool = True
     panel_bodies: list[int] = field(default_factory=list)
+    hidden_bodies: list[int] = field(default_factory=list)  # left out of the 3D scene; panels still show them
     chart: bool = True
     denoise: bool = False
     seed: int = 0
@@ -222,6 +223,7 @@ def _signature(s: RenderSettings, source: Source, spec: FieldSpec, frames: list[
         "display": asdict(s.display),
         "panel": s.panel,
         "panel_bodies": s.panel_bodies,
+        "hidden_bodies": s.hidden_bodies,
         "chart": s.chart,
         "denoise": s.denoise,
         "seed": s.seed,
@@ -328,8 +330,11 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
 
         # Materials at render resolution, sized from the first selected frame's field atlas.
         first, last = selected[0], selected[-1]
+        scene_bodies = [b for b in source.bodies if b.index not in s.hidden_bodies]
+        if not scene_bodies:
+            raise ValueError("--hide leaves no body to render")
         stacks, sizes, scales, initial, last_hash = {}, {}, {}, {}, {}
-        for body in tqdm(source.bodies, desc="materials", unit="body", disable=not progress, leave=False):
+        for body in tqdm(scene_bodies, desc="materials", unit="body", disable=not progress, leave=False):
             value = source.field(first, body.index, spec.name)
             native = value.shape if value is not None else body.material.preferred_size()
             sizes[body.index] = fit_size(native, s.max_texture)
@@ -344,9 +349,9 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
 
         poses = cam.camera_path(source, selected, s.camera, s.width / s.height)
         fscene = scene.FieldScene(
-            source.bodies,
+            scene_bodies,
             initial,
-            {b.index: b.material.metallic for b in source.bodies},
+            {b.index: b.material.metallic for b in scene_bodies},
             s.width,
             s.height,
             s.camera.fov,
@@ -393,6 +398,8 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
             for body in source.bodies:
                 value = source.field(frame, body.index, spec.name)
                 panel_values[body.index] = value
+                if body.index in s.hidden_bodies:
+                    continue
                 digest = _digest(value)
                 if digest == last_hash[body.index]:
                     continue  # textures only change when the field does

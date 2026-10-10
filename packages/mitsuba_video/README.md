@@ -46,6 +46,9 @@ Common options:
 - **Source:** `--source` (default `auto`), `-O KEY=VALUE` source options, `--field NAME`.
 - **Look:** `--look heatmap|worn|plain`.
 - **Camera:** `--camera fixed|track|orbit` with `--azimuth`, `--elevation`, `--zoom`, `--orbit-degrees`.
+- **Scene:** `--hide BODY` leaves a body out of the 3D view (its panel stays). A sliding body wears on the face that
+  touches its partner, so hiding the partner and using a negative `--elevation` films that face from below; add
+  `--no-ground --key-light 0` so the floor and the key light's emitter stay out of the shot.
 - **Display only** (labelled): `--ramp` (opacity fades in with the field) and `--display-max` (colour-bar range).
 - **Video:** `--title`, `--subtitle`, `--hold`, `--fps`.
 
