@@ -5,16 +5,21 @@ Fields: ``wear`` (primary) and ``sliding``, the per-frame 8-bit atlas PNGs the s
 
 * ``scale``: body scale overrides for recordings made before scale was exported, ``"1=0.5,2=0.3"`` or a dict.
 * ``assets``: extra roots holding ``resources/`` for the ``.mtl`` textures (``os.pathsep``-separated or a list).
+
+Materials blend like the viewer (``blend.VIEWER_BLEND``), with the settings the viewer had when the run was recorded
+(``metadata/scene/variant_blend``); older recordings get the viewer defaults.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+from dataclasses import replace
 from typing import ClassVar
 
 import numpy as np
 
+from ...blend import VIEWER_BLEND, BlendParams
 from ...model import Body, FieldSpec, Frame
 from .materials import TextureFrictionMaterial
 from .recording import Recording
@@ -51,6 +56,25 @@ def _scales(value: object) -> dict[int, float]:
     return out
 
 
+# metadata/scene/variant_blend attribute -> BlendParams field
+_RECORDED_BLEND = {
+    "normal_wear_edge0": "edge0",
+    "normal_wear_edge1": "edge1",
+    "hermite_tension": "tension",
+    "hermite_bias": "bias",
+    "height_blend_strength": "height_strength",
+    "height_blend_contrast": "height_contrast",
+    "wear_map_blur_px": "wear_blur_px",
+}
+
+
+def recorded_blend(values: dict[str, float] | None) -> BlendParams:
+    """``VIEWER_BLEND`` with the recorded viewer settings substituted."""
+    if not values:
+        return VIEWER_BLEND
+    return replace(VIEWER_BLEND, **{f: values[k] for k, f in _RECORDED_BLEND.items() if k in values})
+
+
 def _roots(value: object) -> list[Path]:
     if value is None or value == "":
         return []
@@ -73,6 +97,9 @@ class TextureFrictionSource:
         self.fields = {"wear": WEAR, "sliding": SLIDING}
         self.primary_field = "wear"
         self.capabilities = frozenset({"reset_detection"})
+        recorded = recording.variant_blend
+        self.blend = recorded_blend(recorded)
+        blend_enabled = not recorded or recorded.get("enabled", 1.0) != 0.0
         self.frames: list[Frame] = recording.frames
         self.bodies: list[Body] = []
         for rb in recording.bodies:
@@ -86,7 +113,7 @@ class TextureFrictionSource:
                     faces=rb.faces,
                     scale=rb.scale,
                     fixed=rb.fixed,
-                    material=TextureFrictionMaterial(rb),
+                    material=TextureFrictionMaterial(rb, blend_enabled),
                     display_name=rb.name.split("_Material")[0],
                     notes={
                         "scale": f"{rb.scale:g}" + ("" if rb.scale_recorded else "?"),
@@ -119,6 +146,10 @@ class TextureFrictionSource:
 
     def describe(self) -> list[tuple[str, str]]:
         rows = [("recording", str(self.path)), ("scenario", self.title)]
+        if self.recording.variant_blend is None:
+            rows.append(("blend", "viewer defaults (recording predates metadata/scene/variant_blend)"))
+        elif self.recording.variant_blend.get("enabled", 1.0) == 0.0:
+            rows.append(("blend", "off in the viewer when recorded: unworn materials only"))
         if any(not rb.scale_recorded for rb in self.recording.bodies):
             rows.append(("note", "scale not recorded (marked ?): pass -O scale=BODY=SCALE if a body was scaled"))
         rows += [("skipped", s) for s in self.recording.skipped]

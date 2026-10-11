@@ -26,9 +26,9 @@ from tqdm import tqdm
 
 from . import camera as cam
 from . import scene, video
-from .blend import BlendParams, blend_maps
+from .blend import BlendParams, VariantStack, blend_stack
 from .color import FieldDisplay, heatmap_albedo
-from .maps import MapSet, NormalOptions, fit_size, resize_scalar
+from .maps import NormalOptions, fit_size, resize_scalar
 from .model import Body, FieldSpec, Frame
 from .motion import travel_by_frame
 from .source import Source, open_source
@@ -85,6 +85,7 @@ class RenderSettings:
     display: FieldDisplay = field(default_factory=FieldDisplay)
     panel: bool = True
     panel_bodies: list[int] = field(default_factory=list)
+    hidden_bodies: list[int] = field(default_factory=list)  # left out of the 3D scene; panels still show them
     chart: bool = True
     denoise: bool = False
     seed: int = 0
@@ -113,18 +114,29 @@ def resolve_field(source: Source, name: str | None) -> FieldSpec:
 # --- per-frame helpers ---------------------------------------------------------------------------------------
 
 
+def material_stack(
+    body: Body, size: tuple[int, int], normals: NormalOptions, log: Callable[[str], None] | None
+) -> VariantStack:
+    """The body's material as a ``VariantStack``: ``build_stack`` when the provider has it, else base/worn."""
+    build_stack = getattr(body.material, "build_stack", None)
+    if build_stack is not None:
+        return build_stack(size, normals, log)
+    return VariantStack.pair(*body.material.build(size, normals, log))
+
+
 def body_textures(
     look: Look,
     value: np.ndarray | None,
-    base: MapSet,
-    worn: MapSet,
+    stack: VariantStack,
     blend: BlendParams,
     display: FieldDisplay = FieldDisplay(),
     threshold: float = 0.5 / 255.0,
+    texel_scale: float = 1.0,
 ):
+    """Mitsuba textures for one body; ``texel_scale`` is render width / field width (for the wear blur)."""
     if look is Look.plain or value is None:
-        return scene.encode_maps(base)
-    maps = blend_maps(value, base, worn, blend)
+        return scene.encode_maps(stack.base)
+    maps = blend_stack(value, stack, blend, texel_scale)
     base_color = heatmap_albedo(maps.albedo, value, display, threshold) if look is Look.heatmap else None
     return scene.encode_maps(maps, base_color)
 
@@ -211,6 +223,7 @@ def _signature(s: RenderSettings, source: Source, spec: FieldSpec, frames: list[
         "display": asdict(s.display),
         "panel": s.panel,
         "panel_bodies": s.panel_bodies,
+        "hidden_bodies": s.hidden_bodies,
         "chart": s.chart,
         "denoise": s.denoise,
         "seed": s.seed,
@@ -317,23 +330,28 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
 
         # Materials at render resolution, sized from the first selected frame's field atlas.
         first, last = selected[0], selected[-1]
-        mapsets, sizes, initial, last_hash = {}, {}, {}, {}
-        for body in tqdm(source.bodies, desc="materials", unit="body", disable=not progress, leave=False):
+        scene_bodies = [b for b in source.bodies if b.index not in s.hidden_bodies]
+        if not scene_bodies:
+            raise ValueError("--hide leaves no body to render")
+        stacks, sizes, scales, initial, last_hash = {}, {}, {}, {}, {}
+        for body in tqdm(scene_bodies, desc="materials", unit="body", disable=not progress, leave=False):
             value = source.field(first, body.index, spec.name)
             native = value.shape if value is not None else body.material.preferred_size()
             sizes[body.index] = fit_size(native, s.max_texture)
-            mapsets[body.index] = body.material.build(sizes[body.index], s.normals, log)
+            scales[body.index] = sizes[body.index][0] / native[1] if native else 1.0
+            stacks[body.index] = material_stack(body, sizes[body.index], s.normals, log)
+            log(f"blend     body {body.index}: {stacks[body.index].describe()}")
             value_r = None if value is None else resize_scalar(value, sizes[body.index])
             initial[body.index] = body_textures(
-                s.look, value_r, *mapsets[body.index], s.blend, s.display, spec.threshold
+                s.look, value_r, stacks[body.index], s.blend, s.display, spec.threshold, scales[body.index]
             )
             last_hash[body.index] = _digest(value)
 
         poses = cam.camera_path(source, selected, s.camera, s.width / s.height)
         fscene = scene.FieldScene(
-            source.bodies,
+            scene_bodies,
             initial,
-            {b.index: b.material.metallic for b in source.bodies},
+            {b.index: b.material.metallic for b in scene_bodies},
             s.width,
             s.height,
             s.camera.fov,
@@ -380,6 +398,8 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
             for body in source.bodies:
                 value = source.field(frame, body.index, spec.name)
                 panel_values[body.index] = value
+                if body.index in s.hidden_bodies:
+                    continue
                 digest = _digest(value)
                 if digest == last_hash[body.index]:
                     continue  # textures only change when the field does
@@ -387,7 +407,8 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
                 value_r = None if value is None else resize_scalar(value, sizes[body.index])
                 fscene.set_textures(
                     body.index,
-                    body_textures(s.look, value_r, *mapsets[body.index], s.blend, s.display, spec.threshold),
+                    body_textures(s.look, value_r, stacks[body.index], s.blend, s.display, spec.threshold,
+                                  scales[body.index]),  # fmt: skip
                 )
             fscene.set_camera(pose)
             rgb = denoiser(fscene.render(s.spp, seed=s.seed))

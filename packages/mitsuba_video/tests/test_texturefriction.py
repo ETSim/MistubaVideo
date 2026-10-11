@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from conftest import DATA
+from mitsuba_video.blend import VIEWER_BLEND
 from mitsuba_video.camera import CameraSettings, camera_path
 from mitsuba_video.maps import NormalOptions
 from mitsuba_video.motion import travel_by_frame
@@ -37,8 +38,10 @@ def test_reader(tf):
     assert box.scale == pytest.approx(1.5) and box.notes["scale"] == "1.5"
     assert len(tf.frames) == 6
     rec_box = tf.recording.body(1)
-    assert rec_box.worn_variant_index == 1
     assert rec_box.variants[1].normal.shape == (TEX, TEX, 3)
+    stack = box.material.build_stack((16, 16), NormalOptions(), None)
+    assert stack.describe() == "normal 2, albedo 1, roughness 2, height 2"
+    assert tf.blend == VIEWER_BLEND  # no metadata/scene/variant_blend in the synthetic recording
     pos, quat = tf.pose(tf.frames[-1])
     assert pos.shape == (2, 3) and quat.shape == (2, 4)
     assert set(tf.fields) == {"wear", "sliding"} and tf.primary_field == "wear"

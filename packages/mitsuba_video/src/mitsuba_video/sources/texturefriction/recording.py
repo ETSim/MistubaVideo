@@ -53,6 +53,7 @@ class MaterialVariant:
     height: np.ndarray | None  # HxW uint8
     roughness_value: float
     metallic: float
+    albedo: np.ndarray | None = None  # HxWx3 uint8 sRGB; recorded since the serializer exports it
 
 
 @dataclass
@@ -85,7 +86,7 @@ class RecordedBody:
                 if name not in g:
                     return None
                 arr = decode_png(g[name])
-                if arr.ndim == 3 and name != "normal":
+                if arr.ndim == 3 and name not in ("normal", "albedo"):
                     arr = arr[..., 0]
                 if arr.ndim == 3:
                     arr = arr[..., :3]
@@ -97,19 +98,12 @@ class RecordedBody:
                     normal=img("normal"),
                     roughness=img("roughness"),
                     height=img("height"),
+                    albedo=img("albedo"),
                     roughness_value=float(g.attrs.get("roughness", 0.0)),
                     metallic=float(g.attrs.get("metallic", 0.0)),
                 )
             )
         return out
-
-    @property
-    def worn_variant_index(self) -> int:
-        """Same rule as ``WearAtlasBake::tryExportWornBlendedToBodyDir``: variant 3 for 4-way atlases, else 1."""
-        n = len(self.variants)
-        if n < 2:
-            return 0
-        return min(3 if self.normal_variant_count >= 4 else 1, n - 1)
 
     def resolve_texture(self, key: str) -> Path | None:
         """Resolve an ``.mtl`` ``map_*`` entry to an existing file, or None."""
@@ -178,6 +172,7 @@ class Recording:
         self.skipped: list[str] = []
         self.bodies = self._read_bodies()
         self.frames = self._read_frames()
+        self.variant_blend = self._read_variant_blend()
 
     def body(self, index: int) -> RecordedBody:
         return next(b for b in self.bodies if b.index == index)
@@ -196,6 +191,13 @@ class Recording:
         scene = self.file.get("metadata/scene")
         name = scene.attrs.get("scenario_name", "") if scene is not None else ""
         return name.decode(errors="replace") if isinstance(name, bytes) else str(name)
+
+    def _read_variant_blend(self) -> dict[str, float] | None:
+        """``metadata/scene/variant_blend``: the viewer's blend settings at record time (None before they were)."""
+        group = self.file.get("metadata/scene/variant_blend")
+        if group is None:
+            return None
+        return {key: float(value) for key, value in group.attrs.items()}
 
     def _read_bodies(self) -> list[RecordedBody]:
         meta = self.file["metadata"]
