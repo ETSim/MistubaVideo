@@ -38,7 +38,9 @@
       "additionalProperties": false,
       "properties": {
         "edge0": {"type": "number"}, "edge1": {"type": "number"}, "tension": {"type": "number"},
-        "bias": {"type": "number"}, "height_strength": {"type": "number"}, "height_contrast": {"type": "number"}
+        "bias": {"type": "number"}, "height_strength": {"type": "number"}, "height_contrast": {"type": "number"},
+        "wear_blur_px": {"type": "number", "minimum": 0}, "locality": {"type": "number", "minimum": 0},
+        "polish": {"type": "number", "minimum": 0, "maximum": 1}, "roughness_floor": {"type": "boolean"}
       }
     },
     "bodies": {

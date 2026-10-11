@@ -159,7 +159,8 @@ class FieldScene:
                 "emitter": {"type": "area", "radiance": {"type": "rgb", "value": radiance}},
             }
 
-        scene["key_light"] = area_light(azimuth + 50.0, 55.0, 2.5 * extent, 0.9 * extent, lighting.key_strength)
+        if lighting.key_strength > 0:  # 0 disables it, like the rim light (a camera below the scene would see it)
+            scene["key_light"] = area_light(azimuth + 50.0, 55.0, 2.5 * extent, 0.9 * extent, lighting.key_strength)
         if lighting.rim_strength > 0:
             scene["rim_light"] = area_light(azimuth + 200.0, 35.0, 2.5 * extent, 0.6 * extent, lighting.rim_strength)
         if lighting.envmap:

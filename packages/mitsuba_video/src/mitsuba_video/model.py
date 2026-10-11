@@ -39,7 +39,11 @@ class FieldSpec:
 
 
 class MaterialProvider(Protocol):
-    """Builds a body's base and affected ("worn") material maps at a requested resolution."""
+    """Builds a body's base and affected ("worn") material maps at a requested resolution.
+
+    A provider whose material has more than two stages, or channels that do not all change, may also define
+    ``build_stack(size, normals, log) -> VariantStack`` (see ``blend``); the pipeline prefers it to ``build``.
+    """
 
     metallic: float
 

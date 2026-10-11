@@ -112,6 +112,22 @@ def test_render_smoke_tf_alias(tf_recording, tmp_path):
     assert (out / "worn_area.csv").is_file()
 
 
+@pytest.mark.skipif(importlib.util.find_spec("mitsuba") is None, reason="mitsuba not installed")
+def test_render_hide_body_films_from_below(tf_recording, tmp_path):
+    # The worn face of a sliding body faces its partner; --hide drops the partner so a camera below can see it.
+    out = tmp_path / "render_below"
+    args = [str(tf_recording), "--source", "texturefriction", "--out", str(out), "--res", "96x54", "--spp", "4",
+            "--variant", "llvm", "--no-encode", "--frames", "-1:", "--hide", "0", "--no-ground", "--key-light", "0",
+            "--camera", "track", "--elevation", "-30", "--look", "worn"]  # fmt: skip
+    result = _run(args)
+    assert result.returncode == 0, result.stdout + result.stderr
+    config = json.loads((out / pipeline.CONFIG_NAME).read_text())
+    assert config["signature"]["hidden_bodies"] == [0]
+    assert len(list((out / "frames").glob("frame_*.png"))) == 1
+    result = _run(args + ["--hide", "1"])  # both bodies hidden: nothing left to render
+    assert result.returncode != 0 and "no body to render" in result.stdout + result.stderr
+
+
 def test_tf_render_without_h5py_prints_install_hint(monkeypatch, capsys):
     from mitsuba_video import cli
 

@@ -137,7 +137,8 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                                        rich_help_panel=P_CAMERA),
         up: str = typer.Option(None, help="World up axis x | y | z [default: the source's]", rich_help_panel=P_CAMERA),
         exposure: float = typer.Option(0.0, help="Exposure in stops before tone mapping", rich_help_panel=P_LIGHT),
-        key_light: float = typer.Option(1.1, help="Key light irradiance at the scene centre", rich_help_panel=P_LIGHT),
+        key_light: float = typer.Option(1.1, help="Key light irradiance at the scene centre (0 disables)",
+                                        rich_help_panel=P_LIGHT),
         fill: float = typer.Option(0.18, help="Constant environment fill", rich_help_panel=P_LIGHT),
         rim_light: float = typer.Option(0.45, help="Rim light strength (0 disables)", rich_help_panel=P_LIGHT),
         envmap: Path = typer.Option(None, exists=True, help="HDR/EXR environment map (replaces the fill)",
@@ -146,6 +147,8 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
         panel: bool = typer.Option(True, help="UV field-atlas side panel", rich_help_panel=P_FIELD),
         panel_body: list[int] = typer.Option([], help="Body shown in the panel (repeatable) [default: bodies with a "
                                              "non-empty field]", rich_help_panel=P_FIELD),
+        hide: list[int] = typer.Option([], help="Leave this body out of the 3D scene (repeatable); its panel "
+                                       "stays, e.g. to film a worn underside from below", rich_help_panel=P_FIELD),
         chart: bool = typer.Option(True, help="Covered-area vs time chart (data also written as CSV)",
                                    rich_help_panel=P_FIELD),
         display_max: float = typer.Option(1.0, "--display-max", "--wear-display-max", help="Top of the colormap "
@@ -203,6 +206,7 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                 display=FieldDisplay(max=display_max, ramp=ramp, opacity=opacity),
                 panel=panel,
                 panel_bodies=list(panel_body),
+                hidden_bodies=list(hide),
                 chart=chart,
                 denoise=denoise,
                 seed=seed,
