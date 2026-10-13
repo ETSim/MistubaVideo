@@ -11,6 +11,7 @@ flipped back on read.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 from dataclasses import dataclass, field
@@ -35,12 +36,41 @@ def ensure_windows_hdf5_locking() -> None:
         os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 
 
+def _png_bytes(dataset) -> bytes:
+    blob = dataset[()]
+    return blob.tobytes() if hasattr(blob, "tobytes") else bytes(blob)
+
+
+def _png_digest(raw: bytes) -> bytes:
+    return hashlib.blake2b(raw, digest_size=16).digest()
+
+
 def decode_png(dataset) -> np.ndarray:
     """Decode a PNG byte dataset (uint8 1-D) into an HxW or HxWxC uint8 array."""
-    blob = dataset[()]
-    raw = blob.tobytes() if hasattr(blob, "tobytes") else bytes(blob)
-    with Image.open(io.BytesIO(raw)) as img:
+    with Image.open(io.BytesIO(_png_bytes(dataset))) as img:
         return np.asarray(img)
+
+
+# Bodies that share a material store byte-identical material_atlas PNGs (twenty cubes, four materials), and a render
+# opens the recording more than once, so atlas decodes are shared by content hash. Entries are read-only.
+_ATLAS_IMAGES: dict[tuple[bytes, bool], np.ndarray] = {}
+
+
+def atlas_image(dataset, colour: bool) -> np.ndarray:
+    """A ``material_atlas`` PNG as uint8 with row 0 = V = 1: HxWx3 when ``colour`` (normal, albedo) and the PNG has
+    channels, else HxW (first channel)."""
+    raw = _png_bytes(dataset)
+    key = (_png_digest(raw), colour)
+    cached = _ATLAS_IMAGES.get(key)
+    if cached is None:
+        with Image.open(io.BytesIO(raw)) as img:
+            arr = np.asarray(img)
+        if arr.ndim == 3:
+            arr = arr[..., :3] if colour else arr[..., 0]
+        cached = np.ascontiguousarray(arr[::-1])  # undo imageFlippedForOpenGL
+        cached.setflags(write=False)
+        _ATLAS_IMAGES[key] = cached
+    return cached
 
 
 @dataclass
@@ -54,6 +84,15 @@ class MaterialVariant:
     roughness_value: float
     metallic: float
     albedo: np.ndarray | None = None  # HxWx3 uint8 sRGB; recorded since the serializer exports it
+
+
+@dataclass(frozen=True)
+class VariantInfo:
+    """A ``material_atlas`` entry's scalar attributes, readable without decoding its images."""
+
+    name: str
+    roughness_value: float
+    metallic: float
 
 
 @dataclass
@@ -74,33 +113,55 @@ class RecordedBody:
     _group: h5py.Group = field(repr=False)
 
     @cached_property
+    def variant_info(self) -> list[VariantInfo]:
+        """Names, roughness and metallic of the atlas variants (cheap: no image decode)."""
+        if "material_atlas" not in self._group:
+            return []
+        atlas = self._group["material_atlas"]
+        return [
+            VariantInfo(name=str(atlas[key].attrs.get("name", key)),
+                        roughness_value=float(atlas[key].attrs.get("roughness", 0.0)),
+                        metallic=float(atlas[key].attrs.get("metallic", 0.0)))  # fmt: skip
+            for key in sorted(atlas.keys())
+        ]
+
+    @cached_property
+    def material_key(self) -> bytes:
+        """Content hash of everything the material is built from (atlas PNGs, .mtl entries and folder), so bodies
+        that share a material can share its decoded, resized stack."""
+        h = hashlib.blake2b(digest_size=16)
+        h.update(repr((self.material_name, sorted((k, str(v)) for k, v in self.mtl.items()), str(self.mtl_dir),
+                       self.normal_variant_count)).encode())  # fmt: skip
+        if "material_atlas" in self._group:
+            atlas = self._group["material_atlas"]
+            for key in sorted(atlas.keys()):
+                for name in sorted(atlas[key].keys()):
+                    h.update(f"{key}/{name}".encode())
+                    h.update(_png_digest(_png_bytes(atlas[key][name])))
+        return h.digest()
+
+    @cached_property
     def variants(self) -> list[MaterialVariant]:
+        """The atlas variants with their images (decoded on first use, shared between bodies with one material)."""
         if "material_atlas" not in self._group:
             return []
         out = []
         atlas = self._group["material_atlas"]
-        for key in sorted(atlas.keys()):
+        for key, info in zip(sorted(atlas.keys()), self.variant_info, strict=True):
             g = atlas[key]
 
             def img(name: str) -> np.ndarray | None:
-                if name not in g:
-                    return None
-                arr = decode_png(g[name])
-                if arr.ndim == 3 and name not in ("normal", "albedo"):
-                    arr = arr[..., 0]
-                if arr.ndim == 3:
-                    arr = arr[..., :3]
-                return np.ascontiguousarray(arr[::-1])  # undo imageFlippedForOpenGL
+                return atlas_image(g[name], colour=name in ("normal", "albedo")) if name in g else None
 
             out.append(
                 MaterialVariant(
-                    name=str(g.attrs.get("name", key)),
+                    name=info.name,
                     normal=img("normal"),
                     roughness=img("roughness"),
                     height=img("height"),
                     albedo=img("albedo"),
-                    roughness_value=float(g.attrs.get("roughness", 0.0)),
-                    metallic=float(g.attrs.get("metallic", 0.0)),
+                    roughness_value=info.roughness_value,
+                    metallic=info.metallic,
                 )
             )
         return out
@@ -170,6 +231,7 @@ class Recording:
         self._scale_overrides = scale_overrides or {}
         self.asset_roots = default_asset_roots(self.root, asset_roots)
         self.skipped: list[str] = []
+        self._last_texture: dict[tuple[int, str], tuple[bytes, np.ndarray]] = {}
         self.bodies = self._read_bodies()
         self.frames = self._read_frames()
         self.variant_blend = self._read_variant_blend()
@@ -296,7 +358,19 @@ class Recording:
         name = f"textures/body_{body_index}/{kind}"
         arr = None
         if name in g:
-            arr = decode_png(g[name])
+            # Most bodies' wear does not change from one frame to the next: reuse the last decode when the PNG
+            # bytes are identical (the returned array is read-only and shared).
+            raw = _png_bytes(g[name])
+            digest = _png_digest(raw)
+            last = self._last_texture.get((body_index, kind))
+            if last is not None and last[0] == digest:
+                return last[1]
+            with Image.open(io.BytesIO(raw)) as img:
+                arr = np.asarray(img)
+            arr = (arr[..., 0] if arr.ndim == 3 else arr).astype(np.float32) / 255.0
+            arr.setflags(write=False)
+            self._last_texture[(body_index, kind)] = (digest, arr)
+            return arr
         else:
             disk = self.root / "textures" / f"body_{body_index}" / kind / f"{frame.position:04d}.png"
             if disk.is_file():

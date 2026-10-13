@@ -117,7 +117,7 @@ class TextureFrictionSource:
                     display_name=rb.name.split("_Material")[0],
                     notes={
                         "scale": f"{rb.scale:g}" + ("" if rb.scale_recorded else "?"),
-                        "atlas": str(len(rb.variants)),
+                        "atlas": str(len(rb.variant_info)),
                         "mtl tex": "yes" if rb.mtl_dir else "no",
                     },
                 )

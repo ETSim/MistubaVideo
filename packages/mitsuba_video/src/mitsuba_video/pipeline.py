@@ -34,6 +34,9 @@ from .motion import travel_by_frame
 from .source import Source, open_source
 
 CONFIG_NAME = "render_config.json"
+# Frame PNGs are intermediates for the encoder: zlib level 1 is ~5x faster to write than Pillow's default and still
+# lossless.
+FRAME_PNG = {"compress_level": 1}
 
 
 class Look(str, Enum):
@@ -124,6 +127,22 @@ def material_stack(
     return VariantStack.pair(*body.material.build(size, normals, log))
 
 
+def _blended_textures(
+    look: Look,
+    value: np.ndarray | None,
+    stack: VariantStack,
+    blend: BlendParams,
+    display: FieldDisplay,
+    threshold: float,
+    texel_scale: float,
+) -> dict[str, np.ndarray]:
+    if look is Look.plain or value is None:
+        return scene.encode_maps(stack.base)
+    maps = blend_stack(value, stack, blend, texel_scale)
+    base_color = heatmap_albedo(maps.albedo, value, display, threshold) if look is Look.heatmap else None
+    return scene.encode_maps(maps, base_color)
+
+
 def body_textures(
     look: Look,
     value: np.ndarray | None,
@@ -133,12 +152,81 @@ def body_textures(
     threshold: float = 0.5 / 255.0,
     texel_scale: float = 1.0,
 ):
-    """Mitsuba textures for one body; ``texel_scale`` is render width / field width (for the wear blur)."""
-    if look is Look.plain or value is None:
-        return scene.encode_maps(stack.base)
-    maps = blend_stack(value, stack, blend, texel_scale)
-    base_color = heatmap_albedo(maps.albedo, value, display, threshold) if look is Look.heatmap else None
-    return scene.encode_maps(maps, base_color)
+    """Mitsuba textures for one body; ``texel_scale`` is render width / field width (for the wear blur).
+
+    Unworn bodies (no field, or an all-zero one) give the same textures for every body sharing ``stack``, so those
+    are encoded once per stack and look settings and shared: treat the returned arrays as read-only."""
+    if not (look is Look.plain or value is None or not value.any()):
+        return _blended_textures(look, value, stack, blend, display, threshold, texel_scale)
+    key = (id(stack), look, value is None, blend, display, threshold, texel_scale)
+    hit = _UNWORN_TEXTURES.get(key)
+    if hit is None or hit[0] is not stack:
+        hit = _UNWORN_TEXTURES[key] = (stack, _blended_textures(look, value, stack, blend, display, threshold,
+                                                                texel_scale))  # fmt: skip
+    return hit[1]
+
+
+# (id(stack), look settings) -> (stack, textures); the stack is kept so a reused id cannot match a dead stack.
+_UNWORN_TEXTURES: dict[tuple, tuple[VariantStack, dict[str, np.ndarray]]] = {}
+
+
+def _crop_stack(stack: VariantStack, rows: slice, cols: slice) -> VariantStack:
+    return VariantStack(albedo=[a[rows, cols] for a in stack.albedo], normal=[n[rows, cols] for n in stack.normal],
+                        roughness=[r[rows, cols] for r in stack.roughness],
+                        height=[h[rows, cols] for h in stack.height])  # fmt: skip
+
+
+class BodyTextures:
+    """One body's textures across frames, re-blended only where its field changed.
+
+    A texel's textures depend on the field within the wear blur's reach (at most 5 texels), so each changed
+    ``TILE``-sized tile is re-blended over the tile grown by that reach, from a crop grown by the reach again. The
+    result equals a full ``body_textures`` rebuild; a 2048^2 plate with a few new scratches costs a few tiles.
+    """
+
+    TILE = 128
+
+    def __init__(self, look: Look, stack: VariantStack, blend: BlendParams, display: FieldDisplay, threshold: float,
+                 texel_scale: float) -> None:  # fmt: skip
+        self.args = (look, stack, blend, display, threshold, texel_scale)
+        px = blend.wear_blur_px * texel_scale
+        self.reach = int(np.floor(min(px, 4.0))) + 1 if blend.wear_blur_px > 0.0 and px > 0.01 else 0
+        self.value: np.ndarray | None = None
+        self.textures: dict[str, np.ndarray] = {}
+        self._owned = False  # False while self.textures may be the shared unworn arrays
+
+    def update(self, value: np.ndarray | None) -> dict[str, np.ndarray]:
+        look, stack, blend, display, threshold, texel_scale = self.args
+        if (look is Look.plain or value is None or self.value is None or value.shape != self.value.shape
+                or not self.textures):  # fmt: skip
+            self.textures = body_textures(look, value, stack, blend, display, threshold, texel_scale)
+            self._owned = False
+        else:
+            changed = value != self.value
+            if not changed.any():
+                return self.textures
+            if not self._owned:
+                self.textures = {k: v.copy() for k, v in self.textures.items()}
+                self._owned = True
+            self._update_tiles(value, changed)
+        self.value = None if value is None else value.copy()
+        return self.textures
+
+    def _update_tiles(self, value: np.ndarray, changed: np.ndarray) -> None:
+        look, stack, blend, display, threshold, texel_scale = self.args
+        h, w = value.shape
+        t, r = self.TILE, self.reach
+        ys, xs = np.arange(0, h, t), np.arange(0, w, t)
+        tiles = np.logical_or.reduceat(np.logical_or.reduceat(changed, ys, axis=0), xs, axis=1)
+        for iy, ix in zip(*np.nonzero(tiles), strict=True):
+            y0, x0 = int(ys[iy]), int(xs[ix])
+            uy0, ux0, uy1, ux1 = max(y0 - r, 0), max(x0 - r, 0), min(y0 + t + r, h), min(x0 + t + r, w)
+            cy0, cx0, cy1, cx1 = max(uy0 - r, 0), max(ux0 - r, 0), min(uy1 + r, h), min(ux1 + r, w)
+            rows, cols = slice(cy0, cy1), slice(cx0, cx1)
+            sub = _blended_textures(look, value[rows, cols], _crop_stack(stack, rows, cols), blend, display,
+                                    threshold, texel_scale)  # fmt: skip
+            for key, arr in self.textures.items():
+                arr[uy0:uy1, ux0:ux1] = sub[key][uy0 - cy0:uy1 - cy0, ux0 - cx0:ux1 - cx0]
 
 
 def covered_area(
@@ -176,23 +264,30 @@ def _area_series(
     )
 
 
+MAX_PANELS = 3
+
+
 def _panel_sources(source: Source, last: Frame, s: RenderSettings, spec: FieldSpec) -> list[video.PanelSource]:
-    """Bodies in the side panel: explicit ``panel_bodies``, else every body whose field is non-empty by ``last``."""
+    """Bodies in the side panel: explicit ``panel_bodies``, else the (up to three) bodies with the most covered
+    texels by ``last``, so twenty barely-touched cubes do not crowd out the plate they scratched."""
     if not s.panel:
         return []
-    bodies = source.bodies
-    wanted = s.panel_bodies or [b.index for b in bodies if not b.fixed] + [b.index for b in bodies if b.fixed]
-    panels = []
-    for idx in wanted[:3]:
-        body = next((b for b in bodies if b.index == idx), None)
-        if body is None:
-            continue
-        value = source.field(last, idx, spec.name)
-        if value is None or (not s.panel_bodies and not (value > spec.threshold).any()):
-            continue
-        roi = video.wear_roi(value, threshold=spec.threshold)
-        panels.append(video.PanelSource(idx, f"body {idx}: {body.label} (UV atlas)", roi))
-    return panels
+    bodies = {b.index: b for b in source.bodies}
+    if s.panel_bodies:
+        chosen = [(idx, source.field(last, idx, spec.name)) for idx in s.panel_bodies if idx in bodies]
+        chosen = [(idx, value) for idx, value in chosen if value is not None][:MAX_PANELS]
+    else:
+        covered = []
+        for idx in bodies:
+            value = source.field(last, idx, spec.name)
+            count = 0 if value is None else int((value > spec.threshold).sum())
+            if count:
+                covered.append((count, idx, value))
+        covered.sort(key=lambda item: (-item[0], item[1]))
+        chosen = [(idx, value) for _, idx, value in covered[:MAX_PANELS]]
+    return [video.PanelSource(idx, f"body {idx}: {bodies[idx].label} (UV atlas)",
+                              video.wear_roi(value, threshold=spec.threshold))
+            for idx, value in chosen]  # fmt: skip
 
 
 def _digest(value: np.ndarray | None) -> bytes | None:
@@ -333,7 +428,7 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
         scene_bodies = [b for b in source.bodies if b.index not in s.hidden_bodies]
         if not scene_bodies:
             raise ValueError("--hide leaves no body to render")
-        stacks, sizes, scales, initial, last_hash = {}, {}, {}, {}, {}
+        stacks, sizes, scales, textures, last_hash = {}, {}, {}, {}, {}
         for body in tqdm(scene_bodies, desc="materials", unit="body", disable=not progress, leave=False):
             value = source.field(first, body.index, spec.name)
             native = value.shape if value is not None else body.material.preferred_size()
@@ -342,15 +437,15 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
             stacks[body.index] = material_stack(body, sizes[body.index], s.normals, log)
             log(f"blend     body {body.index}: {stacks[body.index].describe()}")
             value_r = None if value is None else resize_scalar(value, sizes[body.index])
-            initial[body.index] = body_textures(
-                s.look, value_r, stacks[body.index], s.blend, s.display, spec.threshold, scales[body.index]
-            )
+            textures[body.index] = BodyTextures(s.look, stacks[body.index], s.blend, s.display, spec.threshold,
+                                                scales[body.index])  # fmt: skip
+            textures[body.index].update(value_r)
             last_hash[body.index] = _digest(value)
 
         poses = cam.camera_path(source, selected, s.camera, s.width / s.height)
         fscene = scene.FieldScene(
             scene_bodies,
-            initial,
+            {index: t.textures for index, t in textures.items()},
             {b.index: b.material.metallic for b in scene_bodies},
             s.width,
             s.height,
@@ -381,6 +476,7 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
         _write_config(out, config)
 
         timings: list[float] = []
+        last_field: dict[int, np.ndarray | None] = {}  # last field array per body: the same object skips re-hashing
         done = {i for i in range(len(selected)) if s.resume and (comp_dir / f"frame_{i:06d}.png").is_file()}
         if done:
             log(f"resume    reusing {len(done)} already rendered frame(s)")
@@ -398,24 +494,21 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
             for body in source.bodies:
                 value = source.field(frame, body.index, spec.name)
                 panel_values[body.index] = value
-                if body.index in s.hidden_bodies:
-                    continue
+                if body.index in s.hidden_bodies or (value is not None and value is last_field.get(body.index)):
+                    continue  # the source handed back the same array: the field did not change
+                last_field[body.index] = value
                 digest = _digest(value)
                 if digest == last_hash[body.index]:
                     continue  # textures only change when the field does
                 last_hash[body.index] = digest
                 value_r = None if value is None else resize_scalar(value, sizes[body.index])
-                fscene.set_textures(
-                    body.index,
-                    body_textures(s.look, value_r, stacks[body.index], s.blend, s.display, spec.threshold,
-                                  scales[body.index]),  # fmt: skip
-                )
+                fscene.set_textures(body.index, textures[body.index].update(value_r))
             fscene.set_camera(pose)
             rgb = denoiser(fscene.render(s.spp, seed=s.seed))
             if s.keep_exr:
                 video.write_exr(exr_dir / f"frame_{i:06d}.exr", rgb)
             ldr = video.tonemap(rgb, s.exposure)
-            Image.fromarray(ldr).save(beauty_dir / f"frame_{i:06d}.png")
+            Image.fromarray(ldr).save(beauty_dir / f"frame_{i:06d}.png", **FRAME_PNG)
 
             header = f"t = {frame.time:.3f} s"
             if mover is not None:
@@ -433,7 +526,7 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
                 field_label=spec.label,
                 field_threshold=spec.threshold,
             )
-            composite.save(comp_path)
+            composite.save(comp_path, **FRAME_PNG)
             timings.append(time.time() - t0)
             bar.set_postfix(frame=frame.index, s_per_frame=f"{timings[-1]:.1f}")
             bar.update()

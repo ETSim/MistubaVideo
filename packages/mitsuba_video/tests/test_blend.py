@@ -157,3 +157,40 @@ def test_recorded_blend_overrides_viewer_defaults():
     p = recorded_blend({"enabled": 1.0, "normal_wear_edge0": 0.1, "hermite_tension": 0.5, "wear_map_blur_px": 0.0})
     assert (p.edge0, p.tension, p.wear_blur_px) == (0.1, 0.5, 0.0)
     assert p.polish == bl.VIEWER_BLEND.polish and p.edge1 == bl.VIEWER_BLEND.edge1
+
+
+def _random_stack(rng, shape, stages=4) -> bl.VariantStack:
+    return bl.VariantStack(
+        albedo=[rng.random(shape + (3,), dtype=np.float32) for _ in range(stages)],
+        normal=[_unit(rng.normal([0, 0, 3], 1, shape + (3,))).astype(np.float32) for _ in range(stages)],
+        roughness=[rng.random(shape, dtype=np.float32) for _ in range(stages)],
+        height=[rng.random(shape, dtype=np.float32) for _ in range(stages)],
+    )
+
+
+@pytest.mark.parametrize("look", ["worn", "heatmap"])
+def test_incremental_textures_match_a_full_rebuild(look, monkeypatch):
+    from mitsuba_video import pipeline
+
+    monkeypatch.setattr(pipeline.BodyTextures, "TILE", 32)  # several tiles on a small, non-multiple atlas
+    rng = np.random.default_rng(3)
+    shape = (150, 97)
+    stack = _random_stack(rng, shape)
+    params = bl.BlendParams(wear_blur_px=2.5)
+    args = (pipeline.Look(look), stack, params, pipeline.FieldDisplay(), 0.5 / 255.0, 1.0)
+    textures = pipeline.BodyTextures(*args)
+    wear = np.zeros(shape, np.float32)
+    textures.update(wear.copy())
+    for step in range(4):  # scratches appear and deepen, including on tile and atlas borders
+        y, x = rng.integers(0, shape[0]), rng.integers(0, shape[1])
+        wear[max(y - 3, 0):y + 3, max(x - 9, 0):x + 9] += 0.3
+        wear[-2:, 40 + step] = 0.8
+        got = textures.update(np.clip(wear, 0, 1))
+        want = pipeline.body_textures(args[0], np.clip(wear, 0, 1), stack, params, args[3], args[4], args[5])
+        for key in want:
+            np.testing.assert_allclose(got[key], want[key], atol=1e-6, err_msg=f"{key} after step {step}")
+    # Shared unworn textures were copied before the first tile write, not modified in place.
+    unworn = pipeline.body_textures(args[0], np.zeros(shape, np.float32), stack, params, args[3], args[4], args[5])
+    full_unworn = pipeline._blended_textures(args[0], np.zeros(shape, np.float32), stack, params, *args[3:])
+    for key in unworn:
+        np.testing.assert_array_equal(unworn[key], full_unworn[key])

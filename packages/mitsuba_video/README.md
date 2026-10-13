@@ -54,6 +54,23 @@ Common options:
 
 `--resume` refuses to continue if the settings changed. The Mitsuba variant is `cuda_ad_rgb` when available, then `llvm_ad_rgb`, then `scalar_rgb`.
 
+Without `--panel-body`, the side panel shows the (up to three) bodies with the most covered texels in the last
+frame.
+
+### Speed
+
+Path tracing is usually the only large per-frame cost. The rest is kept small:
+
+- A recording is opened once, and material images are decoded only when a material is built. Decodes are shared by
+  content, so twenty cubes cut from four materials decode four materials.
+- Bodies with the same material share one resized stack. Unworn bodies share one set of encoded textures.
+- A frame re-blends only the 128-texel tiles whose field changed, plus the wear blur's reach. This gives the same
+  textures as a full rebuild.
+- Unchanged field PNGs are not decoded again, and frame PNGs are written with fast compression.
+
+On a 20-cube recording with a 2048² plate at 960x540 / 16 spp, these changes cut the time per frame from 1.3 s to
+0.5 s. Mitsuba itself takes 0.19 s of that.
+
 ## Writing a manifest from your project
 
 ```python

@@ -180,7 +180,8 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
         """Path trace every selected frame, composite the field panel and chart, and encode the video."""
         width, height, spp_ = _resolution(res, quality, spp)
         options = _source_options(option, scale, assets)
-        up_axis = up or _source_up(source, source_kind, options)
+        source_up, source_blend = _source_defaults(source, source_kind, options)
+        up_axis = up or source_up
         run(
             RenderSettings(
                 source=source,
@@ -202,7 +203,7 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                 exposure=exposure,
                 max_texture=max_texture,
                 normals=NormalOptions(recenter_above_deg=normal_recenter, strength=normal_strength),
-                blend=_source_blend(source, source_kind, options),
+                blend=source_blend,
                 display=FieldDisplay(max=display_max, ramp=ramp, opacity=opacity),
                 panel=panel,
                 panel_bodies=list(panel_body),
@@ -232,6 +233,7 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
         width, height, spp = QUALITY_PRESETS["preview"]
         options = _source_options(option, [], [])
         base = Path(source) if Path(source).is_dir() else Path(source).parent
+        source_up, source_blend = _source_defaults(source, source_kind, options)
         run(
             RenderSettings(
                 source=source,
@@ -244,8 +246,8 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                 spp=spp,
                 frames=frames,
                 variant=variant,
-                camera=CameraSettings(mode=camera.value, up=_source_up(source, source_kind, options)),
-                blend=_source_blend(source, source_kind, options),
+                camera=CameraSettings(mode=camera.value, up=source_up),
+                blend=source_blend,
                 video=VideoSettings(fps=8.0, hold=1.0),
             )
         )
@@ -404,32 +406,16 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
     return app
 
 
-def _peek(source: Path, kind: str, options: dict[str, object]):
-    """Open a source briefly to read source-level defaults (up axis, blend parameters)."""
-    try:
-        return open_source(source, kind, **options)
-    except (ValueError, FileNotFoundError, ImportError):
-        return None
-
-
-def _source_up(source: Path, kind: str, options: dict[str, object]) -> str:
-    src = _peek(source, kind, options)
-    if src is None:
-        return "y"
-    try:
-        return src.up_axis
-    finally:
-        src.close()
-
-
-def _source_blend(source: Path, kind: str, options: dict[str, object]):
+def _source_defaults(source: Path, kind: str, options: dict[str, object]):
+    """Source-level defaults (up axis, blend parameters) from one brief open of the source."""
     from .blend import BlendParams
 
-    src = _peek(source, kind, options)
-    if src is None:
-        return BlendParams()
     try:
-        return getattr(src, "blend", None) or BlendParams()
+        src = open_source(source, kind, **options)
+    except (ValueError, FileNotFoundError, ImportError):
+        return "y", BlendParams()
+    try:
+        return src.up_axis, getattr(src, "blend", None) or BlendParams()
     finally:
         src.close()
 

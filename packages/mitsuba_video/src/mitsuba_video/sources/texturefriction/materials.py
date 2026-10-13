@@ -21,6 +21,7 @@ every channel keeps its first image. Atlas images are stored GL-flipped and flip
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import astuple
 
 import numpy as np
 
@@ -31,6 +32,10 @@ from .recording import MaterialVariant, RecordedBody
 
 Image = np.ndarray | None
 MtlImage = Callable[[str, str], Image]
+
+# Stacks by (material content, size, normal options, blend on/off): twenty cubes cut from four materials build four
+# stacks. Cached slices are read-only; blend_stack writes into a copy.
+_STACKS: dict[tuple, VariantStack] = {}
 
 
 def _atlas_channel(variants: list[MaterialVariant], attr: str, every: bool) -> list[Image]:
@@ -91,9 +96,9 @@ class TextureFrictionMaterial:
     def __init__(self, body: RecordedBody, blend_enabled: bool = True) -> None:
         self.body = body
         self.blend_enabled = blend_enabled
-        variants = body.variants
-        if variants and variants[0].metallic > 0.0:
-            self.metallic = variants[0].metallic
+        info = body.variant_info
+        if info and info[0].metallic > 0.0:
+            self.metallic = info[0].metallic
         else:
             pm = scalar_entry(body.mtl, "Pm")
             self.metallic = pm if pm is not None else 0.0
@@ -103,9 +108,9 @@ class TextureFrictionMaterial:
         return None if path is None else load_image(path, mode)
 
     def _roughness_fallback(self) -> float:
-        variants = self.body.variants
-        if variants and variants[0].roughness_value > 0.0:
-            return variants[0].roughness_value
+        info = self.body.variant_info
+        if info and info[0].roughness_value > 0.0:
+            return info[0].roughness_value
         pr = scalar_entry(self.body.mtl, "Pr")
         return pr if pr is not None and pr > 0.0 else DEFAULT_ROUGHNESS
 
@@ -114,6 +119,18 @@ class TextureFrictionMaterial:
         return max(shapes) if shapes else None
 
     def build_stack(
+        self, size: tuple[int, int], normals: NormalOptions, log: Callable[[str], None] | None
+    ) -> VariantStack:
+        key = (self.body.material_key, tuple(size), astuple(normals), self.blend_enabled)
+        stack = _STACKS.get(key)
+        if stack is None:
+            stack = _STACKS[key] = self._build_stack(size, normals, log)
+            for slices in (stack.albedo, stack.normal, stack.roughness, stack.height):
+                for arr in slices:
+                    arr.setflags(write=False)
+        return stack
+
+    def _build_stack(
         self, size: tuple[int, int], normals: NormalOptions, log: Callable[[str], None] | None
     ) -> VariantStack:
         sources = viewer_channel_sources(self.body.variants, self._mtl_image)
