@@ -22,7 +22,7 @@ the values the viewer had when the run was recorded. The viewer's direction-orie
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -53,6 +53,18 @@ class BlendParams:
     locality: float = 0.0
     polish: float = 0.0
     roughness_floor: bool = False
+    # Presentation terms the viewer does not have (0 = off). ``scratches``: strength of fine striations along the
+    # recorded slide direction inside worn texels (``blend_stack``'s ``direction``). ``burnish`` in [0, 1]: a wider,
+    # smooth wear mask (Gaussian, 10 texels at 1) with weaker height gating, so a stroke reads as one burnished track
+    # rather than the speckle of the individual asperity contacts.
+    scratches: float = 0.0
+    scratch_length_px: float = 24.0
+    burnish: float = 0.0
+
+    @property
+    def wide(self) -> bool:
+        """True when the blend reaches further than the viewer's 5-texel wear blur (tile updates cannot be used)."""
+        return self.scratches > 0.0 or self.burnish > 0.0
 
 
 VIEWER_BLEND = BlendParams(wear_blur_px=0.75, locality=0.02, polish=0.7, roughness_floor=True)
@@ -191,6 +203,58 @@ def blur_wear(wear: np.ndarray, px: float) -> np.ndarray:
     return np.clip(0.4 * w0 + 0.15 * taps, 0.0, 1.0)
 
 
+def gaussian_blur(a: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian blur (FFT, edges reflected by padding) of a 2-D array; ``sigma`` in texels."""
+    if sigma <= 0.05:
+        return a
+    pad = int(np.ceil(3.0 * sigma))
+    p = np.pad(a, pad, mode="reflect")
+    h, w = p.shape
+    ky = np.fft.fftfreq(h).reshape(-1, 1)
+    kx = np.fft.fftfreq(w).reshape(1, -1)
+    g = np.exp(-2.0 * (np.pi * sigma) ** 2 * (kx * kx + ky * ky))
+    out = np.real(np.fft.ifft2(np.fft.fft2(p) * g))
+    return out[pad:-pad, pad:-pad].astype(a.dtype, copy=False)
+
+
+def scratch_field(direction: np.ndarray, region: np.ndarray, length_px: float, seed: int = 0) -> np.ndarray:
+    """Fine striations along a slide-direction field, in [0, 1] (0 outside ``region``).
+
+    ``direction`` is (H, W, 2) in image axes (+col, +row), zero where nothing slid; ``region`` (H, W) bool marks the
+    texels to fill. Directions are spread a little (the slide footprint) and normalised, then sparse grit noise is
+    averaged along them over +-``length_px`` texels: a line-integral convolution, which draws each grain as a short
+    streak parallel to the slide, the way abrasive particles plough grooves."""
+    out = np.zeros(region.shape, np.float32)
+    if not region.any():
+        return out
+    rows, cols = np.nonzero(region)
+    reach = int(np.ceil(length_px)) + 4
+    r0, r1 = max(int(rows.min()) - reach, 0), min(int(rows.max()) + reach + 1, region.shape[0])
+    c0, c1 = max(int(cols.min()) - reach, 0), min(int(cols.max()) + reach + 1, region.shape[1])
+    d = direction[r0:r1, c0:c1].astype(np.float32)
+    d = np.stack([gaussian_blur(d[..., 0], 2.0), gaussian_blur(d[..., 1], 2.0)], axis=-1)
+    norm = np.linalg.norm(d, axis=-1)
+    known = norm > 0.05
+    d = np.where(known[..., None], d / np.maximum(norm, 1e-6)[..., None], 0.0)
+    h, w = norm.shape
+    rng = np.random.default_rng(seed + 7919 * r0 + c0)
+    grit = ((rng.random((h, w)) < 0.05) * rng.uniform(0.3, 1.0, (h, w))).astype(np.float32)
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    steps = max(round(length_px), 1)
+    acc = np.zeros((h, w), np.float32)
+    for k in range(-steps, steps + 1):
+        yy = np.clip(np.rint(ys + k * d[..., 1]), 0, h - 1).astype(np.intp)
+        xx = np.clip(np.rint(xs + k * d[..., 0]), 0, w - 1).astype(np.intp)
+        acc += grit[yy, xx]
+    acc /= 2 * steps + 1
+    inside = region[r0:r1, c0:c1] & known
+    if inside.any():
+        top = float(np.percentile(acc[inside], 99.0))
+        acc = np.clip(acc / max(top, 1e-6), 0.0, 1.0)
+    out[r0:r1, c0:c1] = np.where(inside, acc, 0.0)
+    return out
+
+
 def _normalize(v: np.ndarray) -> np.ndarray:
     n = np.linalg.norm(v, axis=-1, keepdims=True)
     out = v / np.maximum(n, 1e-12)
@@ -265,16 +329,25 @@ def _mix(slices: list[np.ndarray], t: np.ndarray, w4: np.ndarray | None) -> np.n
 
 
 def blend_stack(
-    wear: np.ndarray, stack: VariantStack, p: BlendParams = BlendParams(), texel_scale: float = 1.0
+    wear: np.ndarray,
+    stack: VariantStack,
+    p: BlendParams = BlendParams(),
+    texel_scale: float = 1.0,
+    direction: np.ndarray | None = None,
 ) -> MapSet:
     """The worn appearance for one field image; ``wear`` and the stack share one resolution.
 
     ``texel_scale`` converts ``p.wear_blur_px`` from field texels to this resolution (render width / field width).
+    ``direction`` (H, W, 2), the slide direction in image axes, drives ``p.scratches``; without it there are none.
     """
     out = stack.base.copy()
     if p.roughness_floor:
         out.roughness = np.maximum(out.roughness, 0.04)
     mask = blur_wear(wear, p.wear_blur_px * texel_scale) if p.wear_blur_px > 0.0 else wear
+    if p.burnish > 0.0:
+        b = float(np.clip(p.burnish, 0.0, 1.0))
+        smooth = gaussian_blur(np.clip(wear, 0.0, 1.0).astype(np.float32), 10.0 * b * texel_scale)
+        mask = (1.0 - b) * mask + b * smooth
     active = mask > (LOCALITY_EPS if p.locality > 0.0 else WEAR_EPS)
     if not active.any():
         return out
@@ -283,7 +356,8 @@ def blend_stack(
     if len(stack.height) >= 2:
         h = stack.height
         worn_idx = min(3 if stack.stages >= 4 else 1, len(h) - 1)
-        t = height_blend_t(t, h[0][active], h[worn_idx][active], p)
+        hp = replace(p, height_strength=p.height_strength * (1.0 - float(np.clip(p.burnish, 0.0, 1.0))))
+        t = height_blend_t(t, h[0][active], h[worn_idx][active], hp)
     if p.locality > 0.0:
         t = t * locality(m, p.locality)
     w4 = wear_blend_weights4(t, p) if max(stack.stages, len(stack.height)) >= 4 else None
@@ -307,7 +381,29 @@ def blend_stack(
         out.normal[active] = n
     if out.height is not None and len(stack.height) >= 2:
         out.height[active] = _mix([h[active] for h in stack.height], t, w4)
+    if p.scratches > 0.0 and direction is not None and direction.shape[:2] == wear.shape:
+        _apply_scratches(out, active, t, direction, p, texel_scale)
     return out
+
+
+def _apply_scratches(out: MapSet, active: np.ndarray, t: np.ndarray, direction: np.ndarray, p: BlendParams,
+                     texel_scale: float) -> None:  # fmt: skip
+    """Striations along the slide inside worn texels, weighted by the blend ``t``: brighter, smoother lines in the
+    colour and roughness, and shallow grooves in the normal (the line field as a height, across its gradient)."""
+    s = scratch_field(direction, active, p.scratch_length_px * max(texel_scale, 0.25))
+    if not s.any():
+        return
+    k = float(p.scratches)
+    w = np.clip(k * t, 0.0, 1.0)
+    sa = s[active]
+    out.albedo[active] = np.clip(out.albedo[active] * (1.0 + 1.2 * (w * (sa - 0.35)))[:, None], 0.0, 1.0)
+    out.roughness[active] = np.clip(out.roughness[active] * (1.0 - 0.5 * w * sa), 0.03, 1.0)
+    gy, gx = np.gradient(gaussian_blur(s, 0.6))
+    n = out.normal[active].copy()
+    # Grooves as the height -s, in the convention TextureFriction's maps use: n = (-dh/dcol, -dh/drow, 1).
+    n[:, 0] += 3.0 * w * gx[active]
+    n[:, 1] += 3.0 * w * gy[active]
+    out.normal[active] = _normalize(n)
 
 
 def blend_maps(wear: np.ndarray, base: MapSet, worn: MapSet, p: BlendParams = BlendParams()) -> MapSet:

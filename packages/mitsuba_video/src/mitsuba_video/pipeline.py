@@ -135,10 +135,11 @@ def _blended_textures(
     display: FieldDisplay,
     threshold: float,
     texel_scale: float,
+    direction: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     if look is Look.plain or value is None:
         return scene.encode_maps(stack.base)
-    maps = blend_stack(value, stack, blend, texel_scale)
+    maps = blend_stack(value, stack, blend, texel_scale, direction=direction)
     base_color = heatmap_albedo(maps.albedo, value, display, threshold) if look is Look.heatmap else None
     return scene.encode_maps(maps, base_color)
 
@@ -151,19 +152,33 @@ def body_textures(
     display: FieldDisplay = FieldDisplay(),
     threshold: float = 0.5 / 255.0,
     texel_scale: float = 1.0,
+    direction: np.ndarray | None = None,
 ):
     """Mitsuba textures for one body; ``texel_scale`` is render width / field width (for the wear blur).
+    ``direction`` is the slide direction at the same size (image axes), for ``blend.scratches``.
 
     Unworn bodies (no field, or an all-zero one) give the same textures for every body sharing ``stack``, so those
     are encoded once per stack and look settings and shared: treat the returned arrays as read-only."""
     if not (look is Look.plain or value is None or not value.any()):
-        return _blended_textures(look, value, stack, blend, display, threshold, texel_scale)
+        return _blended_textures(look, value, stack, blend, display, threshold, texel_scale, direction)
     key = (id(stack), look, value is None, blend, display, threshold, texel_scale)
     hit = _UNWORN_TEXTURES.get(key)
     if hit is None or hit[0] is not stack:
         hit = _UNWORN_TEXTURES[key] = (stack, _blended_textures(look, value, stack, blend, display, threshold,
                                                                 texel_scale))  # fmt: skip
     return hit[1]
+
+
+def _direction_at(source: Source, frame: Frame, body_index: int, size: tuple[int, int],
+                  blend: BlendParams) -> np.ndarray | None:  # fmt: skip
+    """The body's slide direction (H, W, 2, image axes) resized to ``size``, when scratches are on and the source
+    records one; else None."""
+    if blend.scratches <= 0.0 or not hasattr(source, "direction"):
+        return None
+    d = source.direction(frame, body_index)
+    if d is None:
+        return None
+    return np.stack([resize_scalar(d[..., 0], size), resize_scalar(d[..., 1], size)], axis=-1)
 
 
 # (id(stack), look settings) -> (stack, textures); the stack is kept so a reused id cannot match a dead stack.
@@ -195,11 +210,12 @@ class BodyTextures:
         self.textures: dict[str, np.ndarray] = {}
         self._owned = False  # False while self.textures may be the shared unworn arrays
 
-    def update(self, value: np.ndarray | None) -> dict[str, np.ndarray]:
+    def update(self, value: np.ndarray | None, direction: np.ndarray | None = None) -> dict[str, np.ndarray]:
         look, stack, blend, display, threshold, texel_scale = self.args
+        # Burnish and scratches reach further than a tile's margin: rebuild the whole body when they are on.
         if (look is Look.plain or value is None or self.value is None or value.shape != self.value.shape
-                or not self.textures):  # fmt: skip
-            self.textures = body_textures(look, value, stack, blend, display, threshold, texel_scale)
+                or not self.textures or blend.wide):  # fmt: skip
+            self.textures = body_textures(look, value, stack, blend, display, threshold, texel_scale, direction)
             self._owned = False
         else:
             changed = value != self.value
@@ -439,7 +455,7 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
             value_r = None if value is None else resize_scalar(value, sizes[body.index])
             textures[body.index] = BodyTextures(s.look, stacks[body.index], s.blend, s.display, spec.threshold,
                                                 scales[body.index])  # fmt: skip
-            textures[body.index].update(value_r)
+            textures[body.index].update(value_r, _direction_at(source, first, body.index, sizes[body.index], s.blend))
             last_hash[body.index] = _digest(value)
 
         poses = cam.camera_path(source, selected, s.camera, s.width / s.height)
@@ -502,7 +518,8 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
                     continue  # textures only change when the field does
                 last_hash[body.index] = digest
                 value_r = None if value is None else resize_scalar(value, sizes[body.index])
-                fscene.set_textures(body.index, textures[body.index].update(value_r))
+                direction = _direction_at(source, frame, body.index, sizes[body.index], s.blend)
+                fscene.set_textures(body.index, textures[body.index].update(value_r, direction))
             fscene.set_camera(pose)
             rgb = denoiser(fscene.render(s.spp, seed=s.seed))
             if s.keep_exr:

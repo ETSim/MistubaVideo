@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sys
@@ -176,11 +177,18 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                                      rich_help_panel=P_ADV),
         seed: int = typer.Option(0, help="Sampler seed, fixed across frames for stable noise", rich_help_panel=P_ADV),
         keep_exr: bool = typer.Option(False, help="Also write linear EXR frames", rich_help_panel=P_ADV),
+        scratches: float = typer.Option(0.0, help="Worn look: strength of fine striations along the recorded slide "
+                                        "direction (0 = off; sources that record one)", rich_help_panel=P_FIELD),
+        burnish: float = typer.Option(0.0, help="Worn look, 0..1: smooth the wear mask into one burnished track "
+                                      "instead of per-contact speckle", rich_help_panel=P_FIELD),
     ) -> None:
         """Path trace every selected frame, composite the field panel and chart, and encode the video."""
         width, height, spp_ = _resolution(res, quality, spp)
         options = _source_options(option, scale, assets)
         source_up, source_blend = _source_defaults(source, source_kind, options)
+        if scratches > 0.0 or burnish > 0.0:
+            source_blend = dataclasses.replace(source_blend, scratches=max(scratches, 0.0),
+                                               burnish=float(min(max(burnish, 0.0), 1.0)))  # fmt: skip
         up_axis = up or source_up
         run(
             RenderSettings(

@@ -144,6 +144,61 @@ class TextureFrictionSource:
     def field(self, frame: Frame, body_index: int, name: str | None = None) -> np.ndarray | None:
         return self.recording.texture(frame, body_index, kind=name or self.primary_field)
 
+    def direction(self, frame: Frame, body_index: int) -> np.ndarray | None:
+        """Slide direction per atlas texel, (H, W, 2) in image axes (+col, +row), zero where nothing slid.
+
+        The serializer exports the direction atlas as a flow map (ImageUtils::directionImageToFlowMapHsv): hue =
+        atan2(dz, dx) / 2 pi + 0.5 of the world XZ slide direction, full saturation, black where nothing was written.
+        It is turned into the body frame with the frame's orientation and mapped onto the atlas with the UV Jacobian
+        of the body's upward-facing triangles (a flat contact face: the ground tiles' tops)."""
+        rgb = self.recording.texture_rgb(frame, body_index, "direction")
+        if rgb is None:
+            return None
+        mx, mn = rgb.max(axis=-1), rgb.min(axis=-1)
+        written = (mx > 0.2) & (mx - mn > 0.1)
+        if not written.any():
+            return None
+        r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+        delta = np.maximum(mx - mn, 1e-6)
+        hue = np.where(mx == r, ((g - b) / delta) % 6.0, np.where(mx == g, (b - r) / delta + 2.0, (r - g) / delta + 4.0))
+        angle = (hue / 6.0 - 0.5) * 2.0 * np.pi
+        d = np.stack([np.cos(angle), np.sin(angle)], axis=-1)  # world (x, z)
+        jac = self._uv_jacobian(body_index)
+        if jac is None:
+            return None
+        _, orientations = self.recording.pose(frame)
+        w, x, y, z = (float(c) for c in orientations[body_index])
+        rot = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])  # fmt: skip
+        world = np.stack([d[..., 0], np.zeros_like(d[..., 0]), d[..., 1]], axis=-1)
+        local = world @ rot  # R^T applied to row vectors
+        img = local[..., [0, 2]] @ jac  # local (x, z) -> (col, row)
+        norm = np.linalg.norm(img, axis=-1, keepdims=True)
+        out = np.where(written[..., None] & (norm > 1e-6), img / np.maximum(norm, 1e-6), 0.0)
+        return out.astype(np.float32)
+
+    def _uv_jacobian(self, body_index: int) -> np.ndarray | None:
+        """2x2 map from a body-local (x, z) step to an atlas (col, row) step, fitted on the upward-facing triangles."""
+        cache = self.__dict__.setdefault("_jacobians", {})
+        if body_index in cache:
+            return cache[body_index]
+        rb = self.recording.body(body_index)
+        tri = rb.faces.astype(np.intp)
+        p = rb.vertices[tri]  # (M, 3, 3)
+        n = np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])
+        up = n[:, 1] > 0.9 * np.linalg.norm(n, axis=1)
+        jac = None
+        if up.any():
+            uv = rb.uvs[tri[up]]
+            pos = p[up][:, :, [0, 2]]
+            e_pos = np.concatenate([pos[:, 1] - pos[:, 0], pos[:, 2] - pos[:, 0]])
+            e_uv = np.concatenate([uv[:, 1] - uv[:, 0], uv[:, 2] - uv[:, 0]])
+            a, *_ = np.linalg.lstsq(e_pos, e_uv, rcond=None)  # e_pos @ a = e_uv
+            jac = a * np.array([1.0, -1.0])  # (u, v) -> (col, row): rows run down, v up
+        cache[body_index] = jac
+        return jac
+
     def describe(self) -> list[tuple[str, str]]:
         rows = [("recording", str(self.path)), ("scenario", self.title)]
         if self.recording.variant_blend is None:

@@ -349,6 +349,21 @@ class Recording:
             np.asarray(g["orientations"][()], dtype=np.float64),
         )
 
+    def texture_rgb(self, frame: Frame, body_index: int, kind: str) -> np.ndarray | None:
+        """Per-frame 8-bit texture as float32 HxWx3 in [0, 1] (all channels; ``texture`` keeps only red), or None."""
+        g = self.file["frames"][frame.key]
+        name = f"textures/body_{body_index}/{kind}"
+        if name in g:
+            with Image.open(io.BytesIO(_png_bytes(g[name]))) as img:
+                arr = np.asarray(img.convert("RGB"))
+        else:
+            disk = self.root / "textures" / f"body_{body_index}" / kind / f"{frame.position:04d}.png"
+            if not disk.is_file():
+                return None
+            with Image.open(disk) as img:
+                arr = np.asarray(img.convert("RGB"))
+        return arr.astype(np.float32) / 255.0
+
     def texture(self, frame: Frame, body_index: int, kind: str = "wear") -> np.ndarray | None:
         """Per-frame 8-bit texture (wear/sliding) as float32 HxW in [0, 1], or None when absent.
 
