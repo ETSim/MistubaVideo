@@ -56,9 +56,11 @@ class BlendParams:
     # Presentation terms the viewer does not have (0 = off). ``scratches``: strength of fine striations along the
     # recorded slide direction inside worn texels (``blend_stack``'s ``direction``). ``burnish`` in [0, 1]: a wider,
     # smooth wear mask (Gaussian, 10 texels at 1) with weaker height gating, so a stroke reads as one burnished track
-    # rather than the speckle of the individual asperity contacts.
+    # rather than the speckle of the individual asperity contacts. ``scratch_density``: the fraction of texels that
+    # seed a grit streak (lower = fewer, more separate scratches).
     scratches: float = 0.0
     scratch_length_px: float = 24.0
+    scratch_density: float = 0.05
     burnish: float = 0.0
 
     @property
@@ -217,13 +219,15 @@ def gaussian_blur(a: np.ndarray, sigma: float) -> np.ndarray:
     return out[pad:-pad, pad:-pad].astype(a.dtype, copy=False)
 
 
-def scratch_field(direction: np.ndarray, region: np.ndarray, length_px: float, seed: int = 0) -> np.ndarray:
+def scratch_field(direction: np.ndarray, region: np.ndarray, length_px: float, seed: int = 0,
+                  density: float = 0.05) -> np.ndarray:  # fmt: skip
     """Fine striations along a slide-direction field, in [0, 1] (0 outside ``region``).
 
     ``direction`` is (H, W, 2) in image axes (+col, +row), zero where nothing slid; ``region`` (H, W) bool marks the
     texels to fill. Directions are spread a little (the slide footprint) and normalised, then sparse grit noise is
     averaged along them over +-``length_px`` texels: a line-integral convolution, which draws each grain as a short
-    streak parallel to the slide, the way abrasive particles plough grooves."""
+    streak parallel to the slide, the way abrasive particles plough grooves. ``density`` is the fraction of texels
+    holding a grain."""
     out = np.zeros(region.shape, np.float32)
     if not region.any():
         return out
@@ -238,7 +242,7 @@ def scratch_field(direction: np.ndarray, region: np.ndarray, length_px: float, s
     d = np.where(known[..., None], d / np.maximum(norm, 1e-6)[..., None], 0.0)
     h, w = norm.shape
     rng = np.random.default_rng(seed + 7919 * r0 + c0)
-    grit = ((rng.random((h, w)) < 0.05) * rng.uniform(0.3, 1.0, (h, w))).astype(np.float32)
+    grit = ((rng.random((h, w)) < float(np.clip(density, 0.0, 1.0))) * rng.uniform(0.3, 1.0, (h, w))).astype(np.float32)
     ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
     steps = max(round(length_px), 1)
     acc = np.zeros((h, w), np.float32)
@@ -390,7 +394,7 @@ def _apply_scratches(out: MapSet, active: np.ndarray, t: np.ndarray, direction: 
                      texel_scale: float) -> None:  # fmt: skip
     """Striations along the slide inside worn texels, weighted by the blend ``t``: brighter, smoother lines in the
     colour and roughness, and shallow grooves in the normal (the line field as a height, across its gradient)."""
-    s = scratch_field(direction, active, p.scratch_length_px * max(texel_scale, 0.25))
+    s = scratch_field(direction, active, p.scratch_length_px * max(texel_scale, 0.25), density=p.scratch_density)
     if not s.any():
         return
     k = float(p.scratches)

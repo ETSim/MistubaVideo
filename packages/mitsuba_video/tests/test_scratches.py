@@ -64,3 +64,32 @@ def test_scratches_and_burnish_touch_only_worn_texels():
     assert not np.allclose(out.albedo[worn_band], plain.albedo[worn_band])  # the striations show
     assert np.allclose(np.linalg.norm(out.normal, axis=-1), 1.0, atol=1e-4)
     assert p.wide and not bl.BlendParams().wide
+
+
+def test_lower_scratch_density_draws_fewer_lines():
+    n = 128
+    region = np.ones((n, n), bool)
+    direction = np.zeros((n, n, 2), np.float32)
+    direction[...] = (1.0, 0.0)
+    dense = bl.scratch_field(direction, region, 10.0, seed=5)
+    sparse = bl.scratch_field(direction, region, 10.0, seed=5, density=0.005)
+    assert (sparse > 0.2).mean() < 0.5 * (dense > 0.2).mean()  # coating shows between the scratches
+    assert sparse.max() > 0.9  # the scratches that remain keep their full contrast
+    assert not bl.scratch_field(direction, region, 10.0, density=0.0).any()
+
+
+def test_render_worn_look_overrides():
+    import typer
+    from mitsuba_video.cli import _blend_overrides
+
+    base = bl.BlendParams()
+    assert _blend_overrides(base, 0.0, 0.0, base.scratch_density, None, None) is base
+    p = _blend_overrides(base, 0.6, 0.0, 0.01, "0.35,0.95", 0.9)
+    assert (p.scratches, p.burnish, p.scratch_density) == (0.6, 0.0, 0.01)
+    assert (p.edge0, p.edge1, p.height_strength) == (0.35, 0.95, 0.9)
+    for bad in ("0.5", "0.9,0.2", "a,b"):
+        try:
+            _blend_overrides(base, 0.0, 0.0, base.scratch_density, bad, None)
+        except typer.BadParameter:
+            continue
+        raise AssertionError(bad)

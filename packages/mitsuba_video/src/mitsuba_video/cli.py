@@ -181,14 +181,19 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                                         "direction (0 = off; sources that record one)", rich_help_panel=P_FIELD),
         burnish: float = typer.Option(0.0, help="Worn look, 0..1: smooth the wear mask into one burnished track "
                                       "instead of per-contact speckle", rich_help_panel=P_FIELD),
+        scratch_density: float = typer.Option(0.05, help="Worn look: fraction of worn texels that seed a scratch "
+                                              "(lower = fewer, more separate lines)", rich_help_panel=P_FIELD),
+        wear_edges: str = typer.Option(None, help="Worn look: override the recorded blend ramp as E0,E1 in the "
+                                       "normalised wear (a higher E0 shows only the deeper-worn texels)",
+                                       rich_help_panel=P_FIELD),
+        height_gate: float = typer.Option(None, help="Worn look, 0..1: override the recorded height_strength (how "
+                                          "strongly high points wear first)", rich_help_panel=P_FIELD),
     ) -> None:
         """Path trace every selected frame, composite the field panel and chart, and encode the video."""
         width, height, spp_ = _resolution(res, quality, spp)
         options = _source_options(option, scale, assets)
         source_up, source_blend = _source_defaults(source, source_kind, options)
-        if scratches > 0.0 or burnish > 0.0:
-            source_blend = dataclasses.replace(source_blend, scratches=max(scratches, 0.0),
-                                               burnish=float(min(max(burnish, 0.0), 1.0)))  # fmt: skip
+        source_blend = _blend_overrides(source_blend, scratches, burnish, scratch_density, wear_edges, height_gate)
         up_axis = up or source_up
         run(
             RenderSettings(
@@ -426,6 +431,27 @@ def _source_defaults(source: Path, kind: str, options: dict[str, object]):
         return src.up_axis, getattr(src, "blend", None) or BlendParams()
     finally:
         src.close()
+
+
+def _blend_overrides(blend, scratches: float, burnish: float, scratch_density: float, wear_edges: str | None,
+                     height_gate: float | None):  # fmt: skip
+    """The source's blend with the render command's worn-look flags applied (unset flags keep the recorded value)."""
+    changes: dict[str, float] = {}
+    if scratches > 0.0 or burnish > 0.0:
+        changes.update(scratches=max(scratches, 0.0), burnish=float(min(max(burnish, 0.0), 1.0)))
+    if scratch_density != blend.scratch_density:
+        changes["scratch_density"] = float(min(max(scratch_density, 0.0), 1.0))
+    if wear_edges:
+        try:
+            e0, e1 = (float(v) for v in wear_edges.split(","))
+        except ValueError as exc:
+            raise typer.BadParameter(f"--wear-edges wants E0,E1, got {wear_edges!r}") from exc
+        if not 0.0 <= e0 < e1 <= 1.0:
+            raise typer.BadParameter(f"--wear-edges needs 0 <= E0 < E1 <= 1, got {wear_edges!r}")
+        changes.update(edge0=e0, edge1=e1)
+    if height_gate is not None:
+        changes["height_strength"] = float(min(max(height_gate, 0.0), 1.0))
+    return dataclasses.replace(blend, **changes) if changes else blend
 
 
 app = build_app()
