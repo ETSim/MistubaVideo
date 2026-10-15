@@ -57,16 +57,18 @@ class BlendParams:
     # recorded slide direction inside worn texels (``blend_stack``'s ``direction``). ``burnish`` in [0, 1]: a wider,
     # smooth wear mask (Gaussian, 10 texels at 1) with weaker height gating, so a stroke reads as one burnished track
     # rather than the speckle of the individual asperity contacts. ``scratch_density``: the fraction of texels that
-    # seed a grit streak (lower = fewer, more separate scratches).
+    # seed a grit streak (lower = fewer, more separate scratches). ``edge_wear``: worn texels on steep relief of the base
+    # height (hole rims, ridges, grain edges) reach the worn stage sooner, as exposed edges do; 0 = off.
     scratches: float = 0.0
     scratch_length_px: float = 24.0
     scratch_density: float = 0.05
     burnish: float = 0.0
+    edge_wear: float = 0.0
 
     @property
     def wide(self) -> bool:
         """True when the blend reaches further than the viewer's 5-texel wear blur (tile updates cannot be used)."""
-        return self.scratches > 0.0 or self.burnish > 0.0
+        return self.scratches > 0.0 or self.burnish > 0.0 or self.edge_wear > 0.0
 
 
 VIEWER_BLEND = BlendParams(wear_blur_px=0.75, locality=0.02, polish=0.7, roughness_floor=True)
@@ -219,6 +221,23 @@ def gaussian_blur(a: np.ndarray, sigma: float) -> np.ndarray:
     return out[pad:-pad, pad:-pad].astype(a.dtype, copy=False)
 
 
+_EDGE_CACHE: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+
+
+def edge_field(height: np.ndarray) -> np.ndarray:
+    """Steepness of a height map in [0, 1]: the slope magnitude (lightly smoothed) over its 98th percentile, so the
+    steepest few percent of texels (rims, ridges) read 1. Cached per array."""
+    hit = _EDGE_CACHE.get(id(height))
+    if hit is not None and hit[0] is height:
+        return hit[1]
+    gy, gx = np.gradient(gaussian_blur(np.asarray(height, np.float32), 0.75))
+    mag = np.hypot(gx, gy)
+    top = float(np.percentile(mag, 98.0))
+    out = np.clip(mag / top, 0.0, 1.0).astype(np.float32) if top > 1e-9 else np.zeros_like(mag, np.float32)
+    _EDGE_CACHE[id(height)] = (height, out)
+    return out
+
+
 def scratch_field(direction: np.ndarray, region: np.ndarray, length_px: float, seed: int = 0,
                   density: float = 0.05) -> np.ndarray:  # fmt: skip
     """Fine striations along a slide-direction field, in [0, 1] (0 outside ``region``).
@@ -362,6 +381,9 @@ def blend_stack(
         worn_idx = min(3 if stack.stages >= 4 else 1, len(h) - 1)
         hp = replace(p, height_strength=p.height_strength * (1.0 - float(np.clip(p.burnish, 0.0, 1.0))))
         t = height_blend_t(t, h[0][active], h[worn_idx][active], hp)
+    if p.edge_wear > 0.0 and stack.height and stack.height[0] is not None:
+        e = edge_field(stack.height[0])[active]
+        t = 1.0 - (1.0 - t) ** (1.0 + float(p.edge_wear) * e)  # only worn texels move: t = 0 stays 0
     if p.locality > 0.0:
         t = t * locality(m, p.locality)
     w4 = wear_blend_weights4(t, p) if max(stack.stages, len(stack.height)) >= 4 else None

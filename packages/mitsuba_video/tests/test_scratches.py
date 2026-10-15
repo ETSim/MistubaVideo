@@ -93,3 +93,22 @@ def test_render_worn_look_overrides():
         except typer.BadParameter:
             continue
         raise AssertionError(bad)
+
+
+def test_edge_wear_moves_worn_rims_ahead_and_leaves_unworn_texels():
+    n = 64
+    yy, xx = np.mgrid[0:n, 0:n]
+    hole = (np.hypot(yy - 32, xx - 32) < 10).astype(np.float32)  # a pit: its rim is the steep relief
+    base, worn = _maps(n, 0.2, 0.6), _maps(n, 0.8, 0.3)
+    base.height, worn.height = 0.7 - 0.5 * hole, 0.7 - 0.5 * hole
+    edge = bl.edge_field(base.height)
+    assert edge[32, 22] > 0.5 and edge[32, 32] < 0.05 and edge[5, 5] < 0.05  # rim steep, pit floor and plateau flat
+    wear = np.zeros((n, n), np.float32)
+    wear[:, 16:48] = 0.3
+    stack = bl.VariantStack.pair(base, worn)
+    plain = bl.blend_stack(wear, stack, bl.BlendParams(height_strength=0.0))
+    edged = bl.blend_stack(wear, stack, bl.BlendParams(height_strength=0.0, edge_wear=2.0))
+    assert edged.albedo[32, 22, 0] > plain.albedo[32, 22, 0] + 0.05  # the rim reads more worn
+    assert np.allclose(edged.albedo[5, 30], plain.albedo[5, 30], atol=1e-4)  # flat worn texel: unchanged
+    assert np.allclose(edged.albedo[:, :8], base.albedo[:, :8])  # unworn texels stay base
+    assert bl.BlendParams(edge_wear=1.0).wide

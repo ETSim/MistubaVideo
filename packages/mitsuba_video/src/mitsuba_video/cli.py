@@ -188,12 +188,15 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                                        rich_help_panel=P_FIELD),
         height_gate: float = typer.Option(None, help="Worn look, 0..1: override the recorded height_strength (how "
                                           "strongly high points wear first)", rich_help_panel=P_FIELD),
+        edge_wear: float = typer.Option(0.0, help="Worn look: worn texels on steep relief (hole rims, ridges) reach "
+                                        "the worn stage sooner (0 = off, 2 = strong)", rich_help_panel=P_FIELD),
     ) -> None:
         """Path trace every selected frame, composite the field panel and chart, and encode the video."""
         width, height, spp_ = _resolution(res, quality, spp)
         options = _source_options(option, scale, assets)
         source_up, source_blend = _source_defaults(source, source_kind, options)
-        source_blend = _blend_overrides(source_blend, scratches, burnish, scratch_density, wear_edges, height_gate)
+        source_blend = _blend_overrides(source_blend, scratches, burnish, scratch_density, wear_edges, height_gate,
+                                        edge_wear)  # fmt: skip
         up_axis = up or source_up
         run(
             RenderSettings(
@@ -434,7 +437,7 @@ def _source_defaults(source: Path, kind: str, options: dict[str, object]):
 
 
 def _blend_overrides(blend, scratches: float, burnish: float, scratch_density: float, wear_edges: str | None,
-                     height_gate: float | None):  # fmt: skip
+                     height_gate: float | None, edge_wear: float = 0.0):  # fmt: skip
     """The source's blend with the render command's worn-look flags applied (unset flags keep the recorded value)."""
     changes: dict[str, float] = {}
     if scratches > 0.0 or burnish > 0.0:
@@ -451,6 +454,8 @@ def _blend_overrides(blend, scratches: float, burnish: float, scratch_density: f
         changes.update(edge0=e0, edge1=e1)
     if height_gate is not None:
         changes["height_strength"] = float(min(max(height_gate, 0.0), 1.0))
+    if edge_wear > 0.0:
+        changes["edge_wear"] = float(edge_wear)
     return dataclasses.replace(blend, **changes) if changes else blend
 
 
