@@ -439,9 +439,14 @@ def _source_defaults(source: Path, kind: str, options: dict[str, object]):
 def _blend_overrides(blend, scratches: float, burnish: float, scratch_density: float, wear_edges: str | None,
                      height_gate: float | None, edge_wear: float = 0.0):  # fmt: skip
     """The source's blend with the render command's worn-look flags applied (unset flags keep the recorded value)."""
-    changes: dict[str, float] = {}
+    changes: dict = {}
     if scratches > 0.0 or burnish > 0.0:
         changes.update(scratches=max(scratches, 0.0), burnish=float(min(max(burnish, 0.0), 1.0)))
+        # Match the viewer presentation so worn tracks change gloss, not only colour.
+        if not blend.roughness_floor:
+            changes["roughness_floor"] = True
+        if blend.polish <= 0.0:
+            changes["polish"] = 0.55
     if scratch_density != blend.scratch_density:
         changes["scratch_density"] = float(min(max(scratch_density, 0.0), 1.0))
     if wear_edges:

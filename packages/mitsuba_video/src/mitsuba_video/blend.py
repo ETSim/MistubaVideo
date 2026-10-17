@@ -422,8 +422,9 @@ def _apply_scratches(out: MapSet, active: np.ndarray, t: np.ndarray, direction: 
     k = float(p.scratches)
     w = np.clip(k * t, 0.0, 1.0)
     sa = s[active]
-    out.albedo[active] = np.clip(out.albedo[active] * (1.0 + 1.2 * (w * (sa - 0.35)))[:, None], 0.0, 1.0)
-    out.roughness[active] = np.clip(out.roughness[active] * (1.0 - 0.5 * w * sa), 0.03, 1.0)
+    # Stronger albedo lift so tracks stay readable under glossy enamel/lacquer at grazing angles.
+    out.albedo[active] = np.clip(out.albedo[active] * (1.0 + 1.8 * (w * (sa - 0.30)))[:, None], 0.0, 1.0)
+    out.roughness[active] = np.clip(out.roughness[active] * (1.0 - 0.65 * w * sa), 0.03, 1.0)
     gy, gx = np.gradient(gaussian_blur(s, 0.6))
     n = out.normal[active].copy()
     # Grooves as the height -s, in the convention TextureFriction's maps use: n = (-dh/dcol, -dh/drow, 1).
