@@ -113,19 +113,30 @@ class FieldScene:
         up_axis: str = "y",
         max_depth: int = 8,
         azimuth: float = -55.0,
+        denoise_guides: bool = False,
     ):
         mi = mitsuba()
         self.bodies = bodies
         self.width, self.height = width, height
         self.up_axis = up_axis
+        self._denoise_guides = denoise_guides
         lo, hi = bounds
         center = 0.5 * (lo + hi)
         extent = max(float(np.linalg.norm(hi - lo)), 1e-6)
         up, e1, e2 = up_basis(up_axis)
 
+        # Albedo + shading-normal AOVs feed OptiX; without them the denoiser barely helps.
+        integrator: dict = {"type": "path", "max_depth": max_depth}
+        if denoise_guides:
+            integrator = {
+                "type": "aov",
+                "aovs": "albedo:albedo,nn:sh_normal",
+                "integrator": integrator,
+            }
+
         scene: dict = {
             "type": "scene",
-            "integrator": {"type": "path", "max_depth": max_depth},
+            "integrator": integrator,
             "sensor": {
                 "type": "perspective",
                 "fov": fov,
@@ -255,41 +266,98 @@ class FieldScene:
 
     def set_camera(self, pose: CameraPose) -> None:
         mi = mitsuba()
-        self.params["sensor.to_world"] = mi.Transform4f().look_at(
+        self._to_world = mi.Transform4f().look_at(
             origin=pose.eye.tolist(), target=pose.target.tolist(), up=pose.up.tolist()
         )
+        self.params["sensor.to_world"] = self._to_world
 
-    def render(self, spp: int, seed: int = 0) -> np.ndarray:
+    def to_sensor(self):
+        """World-to-sensor transform for OptiX (sh_normal is world-space)."""
+        mi = mitsuba()
+        to_world = getattr(self, "_to_world", None)
+        if to_world is None:
+            return mi.Transform4f()
+        return to_world.inverse()
+
+    def render(self, spp: int, seed: int = 0) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
         mi = mitsuba()
         self.params.update()
         img = mi.render(self.scene, spp=spp, seed=seed)
-        return np.asarray(img, dtype=np.float32)[..., :3]
+        arr = np.asarray(img, dtype=np.float32)
+        rgb = np.ascontiguousarray(arr[..., :3])
+        if not self._denoise_guides:
+            return rgb
+        # AOV layout: RGB beauty, then albedo (3), then sh_normal (3).
+        albedo = np.ascontiguousarray(arr[..., 3:6])
+        normals = np.ascontiguousarray(arr[..., 6:9])
+        return rgb, albedo, normals
 
 
 WearScene = FieldScene  # former name
 
 
 class Denoiser:
-    """OptiX denoiser (CUDA variants only); a no-op passthrough elsewhere."""
+    """OptiX denoiser (CUDA variants only); a no-op passthrough elsewhere.
 
-    def __init__(self, width: int, height: int, enabled: bool):
+    When albedo/normal guides are available (FieldScene built with ``denoise_guides``), they are
+    passed through; without them OptiX barely reduces Monte Carlo noise on these scenes.
+    """
+
+    def __init__(self, width: int, height: int, enabled: bool, use_guides: bool = True):
         self._denoiser = None
+        self._use_guides = use_guides
         if not enabled:
             return
         mi = mitsuba()
         if not mi.variant().startswith("cuda"):
             return
         try:
-            self._denoiser = mi.OptixDenoiser(input_size=[width, height], albedo=False, normals=False, temporal=False)
+            self._denoiser = mi.OptixDenoiser(
+                input_size=[width, height],
+                albedo=use_guides,
+                normals=use_guides,
+                temporal=False,
+            )
         except Exception as exc:  # noqa: BLE001
-            print(f"[render] OptiX denoiser unavailable ({exc}); continuing without it")
+            if use_guides:
+                try:
+                    self._denoiser = mi.OptixDenoiser(
+                        input_size=[width, height], albedo=False, normals=False, temporal=False
+                    )
+                    self._use_guides = False
+                    print(f"[render] OptiX with guides failed ({exc}); falling back to beauty-only")
+                except Exception as exc2:  # noqa: BLE001
+                    print(f"[render] OptiX denoiser unavailable ({exc2}); continuing without it")
+            else:
+                print(f"[render] OptiX denoiser unavailable ({exc}); continuing without it")
 
     @property
     def active(self) -> bool:
         return self._denoiser is not None
 
-    def __call__(self, rgb: np.ndarray) -> np.ndarray:
+    @property
+    def uses_guides(self) -> bool:
+        return self._denoiser is not None and self._use_guides
+
+    def __call__(
+        self,
+        rgb: np.ndarray,
+        albedo: np.ndarray | None = None,
+        normals: np.ndarray | None = None,
+        to_sensor=None,
+    ) -> np.ndarray:
         if self._denoiser is None:
             return rgb
         mi = mitsuba()
-        return np.asarray(self._denoiser(mi.TensorXf(np.ascontiguousarray(rgb))), dtype=np.float32)
+        noisy = mi.TensorXf(np.ascontiguousarray(rgb, dtype=np.float32))
+        if self._use_guides and albedo is not None and normals is not None:
+            kwargs = {
+                "albedo": mi.TensorXf(np.ascontiguousarray(albedo, dtype=np.float32)),
+                "normals": mi.TensorXf(np.ascontiguousarray(normals, dtype=np.float32)),
+            }
+            if to_sensor is not None:
+                kwargs["to_sensor"] = to_sensor
+            out = self._denoiser(noisy, **kwargs)
+        else:
+            out = self._denoiser(noisy)
+        return np.asarray(out, dtype=np.float32)

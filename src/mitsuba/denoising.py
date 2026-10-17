@@ -2,12 +2,12 @@
 Module for image denoising capabilities in the Mitsuba renderer.
 
 Supports the NVIDIA OptiX AI Denoiser for high-quality denoising of rendered images.
+When albedo and shading-normal guides are available, they are passed through; without
+them OptiX barely reduces Monte Carlo noise on these scenes.
 """
 
 import os
-import sys
-import glob
-from typing import Dict, Any, List, Optional, Union, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 from pathlib import Path
 import mitsuba as mi
 import numpy as np
@@ -105,12 +105,17 @@ try:
             if hasattr(mi, "OptixDenoiser"):
                 # Try to create a small test denoiser to confirm it works
                 try:
-                    test_denoiser = mi.OptixDenoiser(input_size=(64, 64), albedo=False, normals=False)
+                    test_denoiser = mi.OptixDenoiser(input_size=(64, 64), albedo=True, normals=True)
                     OPTIX_AVAILABLE = True
-                    logger.info("NVIDIA OptiX denoiser is available and working")
-                except Exception as e:
-                    logger.warning(f"OptiX denoiser constructor failed: {e}")
-                    OPTIX_AVAILABLE = False
+                    logger.info("NVIDIA OptiX denoiser is available and working (with guide buffers)")
+                except Exception:
+                    try:
+                        test_denoiser = mi.OptixDenoiser(input_size=(64, 64), albedo=False, normals=False)
+                        OPTIX_AVAILABLE = True
+                        logger.info("NVIDIA OptiX denoiser is available (beauty-only fallback)")
+                    except Exception as e:
+                        logger.warning(f"OptiX denoiser constructor failed: {e}")
+                        OPTIX_AVAILABLE = False
             else:
                 logger.warning("OptixDenoiser class not found in Mitsuba CUDA variant")
                 
@@ -138,6 +143,24 @@ def is_tensorxf_available() -> bool:
     except ImportError:
         return False
 
+
+def _image_size(image: Any) -> Tuple[int, int]:
+    if hasattr(image, "size"):
+        size = image.size()
+        return (int(size[0]), int(size[1]))
+    if hasattr(image, "shape") and len(image.shape) >= 2:
+        return (int(image.shape[1]), int(image.shape[0]))  # (width, height) for OptiX
+    raise ValueError(f"Invalid image format, cannot determine size: {type(image)}")
+
+
+def _as_bitmap(image: Union[mi.Bitmap, str, np.ndarray]) -> mi.Bitmap:
+    if isinstance(image, mi.Bitmap):
+        return image
+    if isinstance(image, str):
+        return mi.Bitmap(image)
+    return mi.Bitmap(np.asarray(image, dtype=np.float32))
+
+
 class DenoiserManager:
     """
     Class to manage image denoising operations using the OptiX AI Denoiser.
@@ -149,40 +172,13 @@ class DenoiserManager:
     _denoiser_config = {}
     
     @staticmethod
-    def _get_cached_denoiser(size: Tuple[int, int], use_albedo: bool = False, use_normals: bool = False, temporal: bool = False):
-        """
-        Get or create a denoiser with specific parameters, using cache to avoid recreation.
-        
-        Args:
-            size: Image size (width, height)
-            use_albedo: Whether to use albedo buffers (default: False)
-            use_normals: Whether to use normal buffers (default: False)
-            temporal: Whether to use temporal denoising (default: False)
-            
-        Returns:
-            OptixDenoiser instance or None if creation fails
-        """
-        # Always use basic denoiser without guide buffers for reliability
-        use_albedo = False
-        use_normals = False
-        if temporal:
-            logger.info("Disabling temporal denoising for reliability")
-            temporal = False
-            
-        if not OPTIX_AVAILABLE:
-            logger.info("OptiX denoiser not available")
-            return None
-            
-        # Set CUDA variant first
+    def _ensure_cuda_variant() -> bool:
         variants = mi.variants()
         cuda_variants = [v for v in variants if isinstance(v, str) and ("cuda" in v.lower() or "gpu" in v.lower())]
         if not cuda_variants:
             logger.warning("No CUDA variants available, OptiX denoiser cannot be used")
-            return None
-        
-        # Ensure we're using a CUDA variant
+            return False
         if not any(x in mi.variant() for x in ["cuda", "gpu"]):
-            # Try to set a CUDA variant
             for variant in ["cuda_ad_rgb", "cuda_rgb", "cuda_spectral"]:
                 if variant in variants:
                     try:
@@ -191,31 +187,56 @@ class DenoiserManager:
                         break
                     except Exception as e:
                         logger.warning(f"Failed to set variant {variant}: {e}")
-        
-        # Log current variant
         logger.info(f"Current variant for denoising: {mi.variant()}")
+        return True
+
+    @staticmethod
+    def _get_cached_denoiser(size: Tuple[int, int], use_albedo: bool = False, use_normals: bool = False, temporal: bool = False):
+        """
+        Get or create a denoiser with specific parameters, using cache to avoid recreation.
         
-        # Check if we have a cached denoiser for these parameters
+        Args:
+            size: Image size (width, height)
+            use_albedo: Whether to use albedo buffers
+            use_normals: Whether to use normal buffers
+            temporal: Whether to use temporal denoising (kept off for reliability)
+            
+        Returns:
+            OptixDenoiser instance or None if creation fails
+        """
+        if temporal:
+            logger.info("Disabling temporal denoising for reliability")
+            temporal = False
+            
+        if not OPTIX_AVAILABLE:
+            logger.info("OptiX denoiser not available")
+            return None
+
+        if not DenoiserManager._ensure_cuda_variant():
+            return None
+        
         cache_key = (size, use_albedo, use_normals, temporal)
         if cache_key not in DenoiserManager._denoiser_cache:
             try:
-                # Create the basic denoiser - NO guide buffers
-                logger.info(f"Creating new basic denoiser (size={size}, no guide buffers)")
+                logger.info(
+                    f"Creating OptiX denoiser (size={size}, albedo={use_albedo}, normals={use_normals})"
+                )
                 DenoiserManager._denoiser_cache[cache_key] = mi.OptixDenoiser(
                     input_size=size,
-                    albedo=False,
-                    normals=False,
-                    temporal=False
+                    albedo=use_albedo,
+                    normals=use_normals,
+                    temporal=False,
                 )
-                # Store the configuration
                 DenoiserManager._denoiser_config[cache_key] = {
-                    "use_albedo": False,
-                    "use_normals": False,
+                    "use_albedo": use_albedo,
+                    "use_normals": use_normals,
                     "temporal": False,
-                    "size": size
+                    "size": size,
                 }
-                logger.info(f"Successfully created basic OptiX denoiser")
             except Exception as e:
+                if use_albedo or use_normals:
+                    logger.warning(f"Guided OptiX denoiser failed ({e}); retrying beauty-only")
+                    return DenoiserManager._get_cached_denoiser(size, False, False, False)
                 logger.warning(f"Failed to create OptiX denoiser: {e}")
                 return None
         
@@ -262,6 +283,48 @@ class DenoiserManager:
             'aovs': 'albedo:albedo,normals:sh_normal',
             'integrator': base_integrator
         }
+
+    @staticmethod
+    def _apply(
+        image: mi.Bitmap,
+        albedo: Optional[mi.Bitmap],
+        normals: Optional[mi.Bitmap],
+        to_sensor: Optional[Any],
+    ) -> mi.Bitmap:
+        size = _image_size(image)
+        use_guides = albedo is not None and normals is not None
+        denoiser = DenoiserManager._get_cached_denoiser(size, use_guides, use_guides, False)
+        if denoiser is None:
+            return image
+
+        # Multichannel Bitmap path: channel names when the beauty EXR already holds AOVs.
+        if hasattr(image, "channel_count") and image.channel_count() > 3 and use_guides:
+            channels = dict(image.split())
+            albedo_ch = "albedo" if "albedo" in channels else ""
+            normals_ch = (
+                "sh_normal" if "sh_normal" in channels
+                else "normals" if "normals" in channels
+                else ""
+            )
+            if albedo_ch and normals_ch:
+                kwargs = {"albedo_ch": albedo_ch, "normals_ch": normals_ch}
+                if to_sensor is not None:
+                    kwargs["to_sensor"] = to_sensor
+                return denoiser(image, **kwargs)
+
+        # Separate beauty + guide buffers as tensors.
+        noisy = convert_to_tensor(image)
+        if use_guides:
+            kwargs = {
+                "albedo": convert_to_tensor(albedo),
+                "normals": convert_to_tensor(normals),
+            }
+            if to_sensor is not None:
+                kwargs["to_sensor"] = to_sensor
+            out = denoiser(noisy, **kwargs)
+        else:
+            out = denoiser(noisy)
+        return convert_from_tensor(out)
     
     @staticmethod
     @timeit(log_level="debug")
@@ -281,59 +344,37 @@ class DenoiserManager:
             image: Input image as Mitsuba Bitmap or path to EXR file
             albedo: Optional albedo buffer for improved denoising
             normals: Optional surface normals buffer for improved denoising
-            denoiser_strength: Strength of denoising (0.0 to 1.0)
-            prev_frame: Optional previous frame for temporal denoising
-            optical_flow: Optional optical flow for temporal denoising
+            denoiser_strength: Strength of denoising (0.0 to 1.0); reserved for blend
+            prev_frame: Optional previous frame for temporal denoising (unused)
+            optical_flow: Optional optical flow for temporal denoising (unused)
             to_sensor: Optional transform to convert normals to sensor space
             
         Returns:
             Denoised image as Mitsuba Bitmap
-            
-        Raises:
-            ValueError: If the denoiser is not available or inputs are invalid
         """
-        # Check if OptiX is available
         if not OPTIX_AVAILABLE:
             logger.warning("OptiX denoiser not available, returning original image")
             return image if isinstance(image, mi.Bitmap) else mi.Bitmap(image)
-            
-        # Handle string paths
-        if isinstance(image, str):
-            image = mi.Bitmap(image)
-            
-        # Get image shape
-        if hasattr(image, 'size'):
-            size = image.size()
-        elif hasattr(image, 'shape') and len(image.shape) >= 2:
-            size = image.shape[:2]
-        else:
-            raise ValueError(f"Invalid image format, cannot determine size: {type(image)}")
-        
-        logger.info(f"Denoising image of size {size}")
-        
-        # Use the simplest, most basic approach for maximum reliability
-        logger.info("Using basic denoising without guide buffers")
-        
+
+        image = _as_bitmap(image)
+        albedo_bm = _as_bitmap(albedo) if albedo is not None else None
+        normals_bm = _as_bitmap(normals) if normals is not None else None
+        logger.info(
+            f"Denoising image of size {_image_size(image)} "
+            f"(guides={'on' if albedo_bm is not None and normals_bm is not None else 'off'})"
+        )
         try:
-            # Create a basic denoiser directly - not from cache
-            logger.info("Creating basic denoiser with no guide buffers")
-            denoiser = mi.OptixDenoiser(
-                input_size=size,
-                albedo=False,
-                normals=False,
-                temporal=False
-            )
-            
-            # Apply denoising using the simplest approach
-            logger.info("Denoising image with basic OptiX denoiser")
-            denoised = denoiser(image)
-            logger.info("Denoising completed successfully")
-            
+            denoised = DenoiserManager._apply(image, albedo_bm, normals_bm, to_sensor)
+            if denoiser_strength < 1.0:
+                # Soft blend toward the noisy input when strength < 1.
+                a = np.asarray(image, dtype=np.float32)[..., :3]
+                b = np.asarray(denoised, dtype=np.float32)[..., :3]
+                mixed = (1.0 - denoiser_strength) * a + denoiser_strength * b
+                return mi.Bitmap(mixed)
             return denoised
-                
         except Exception as e:
             logger.error(f"Error in OptiX denoising: {e}", exc_info=True)
-            return image  # Return original image on error
+            return image
     
     @staticmethod
     @timeit(log_level="info")  
@@ -434,74 +475,37 @@ class DenoiserManager:
         """
         Safely denoise an image, falling back to the original if denoising fails.
         
-        This simplified version prioritizes reliability over advanced features.
-        
         Args:
             image: Input image as Mitsuba Bitmap or path to EXR file
-            albedo: Optional albedo buffer for improved denoising (not used in basic mode)
-            normals: Optional surface normals buffer for improved denoising (not used in basic mode)
+            albedo: Optional albedo buffer for improved denoising
+            normals: Optional surface normals buffer for improved denoising
             denoiser_strength: Strength of denoising (0.0 to 1.0)
-            prev_frame: Optional previous frame for temporal denoising (not used in basic mode)
-            optical_flow: Optional optical flow for temporal denoising (not used in basic mode)
+            prev_frame: Optional previous frame for temporal denoising (unused)
+            optical_flow: Optional optical flow for temporal denoising (unused)
             to_sensor: Optional transform to convert normals to sensor space
             
         Returns:
             Denoised image as Mitsuba Bitmap, or original image if denoising fails
         """
-        # Handle string paths
-        if isinstance(image, str):
-            try:
-                image = mi.Bitmap(image)
-            except Exception as e:
-                logger.error(f"Failed to load image from {image}: {e}")
-                return image  # Return the original path
-        
-        # Check if OptiX is available
-        if not OPTIX_AVAILABLE:
-            logger.warning("OptiX denoiser not available - skipping denoising")
-            return image
-        
-        # Log the denoising attempt
-        logger.info(f"Attempting to denoise image with strength={denoiser_strength}")
-        
-        # Use simplest approach for maximum reliability
         try:
-            # Basic denoising - just the image without guide buffers
-            logger.info("Using basic denoising without guide buffers")
-            
-            # Get image shape first
-            if hasattr(image, 'size'):
-                size = image.size()
-            elif hasattr(image, 'shape') and len(image.shape) >= 2:
-                size = image.shape[:2]
-            else:
-                logger.error(f"Cannot determine image size from {type(image)}")
-                return image
-            
-            # Create simple denoiser directly - not from cache
-            try:
-                logger.info(f"Creating basic denoiser for image size {size}")
-                denoiser = mi.OptixDenoiser(
-                    input_size=size,
-                    albedo=False,
-                    normals=False,
-                    temporal=False
-                )
-                
-                # Simple denoise call
-                logger.info("Applying basic denoising")
-                denoised = denoiser(image)
-                logger.info("Basic denoising succeeded")
-                return denoised
-            except Exception as e:
-                logger.error(f"Basic denoising failed: {e}")
-                return image
-                
+            return DenoiserManager.denoise_image(
+                image=image,
+                albedo=albedo,
+                normals=normals,
+                denoiser_strength=denoiser_strength,
+                prev_frame=prev_frame,
+                optical_flow=optical_flow,
+                to_sensor=to_sensor,
+            )
         except Exception as e:
             logger.error(f"Denoising failed: {e}")
-            logger.debug(f"Error details:", exc_info=True)
-            return image  # Return the original image if denoising fails
+            logger.debug("Error details:", exc_info=True)
+            if isinstance(image, str):
+                try:
+                    return mi.Bitmap(image)
+                except Exception:
+                    return image  # type: ignore[return-value]
+            return image
 
 # Make sure to export a simulated AVAILABLE_DENOISERS for backwards compatibility with older code
 AVAILABLE_DENOISERS = {"optix": OPTIX_AVAILABLE}
-

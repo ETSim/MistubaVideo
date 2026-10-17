@@ -471,8 +471,9 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
             up_axis=s.camera.up,
             max_depth=s.max_depth,
             azimuth=s.camera.azimuth,
+            denoise_guides=s.denoise,
         )
-        denoiser = scene.Denoiser(s.width, s.height, s.denoise)
+        denoiser = scene.Denoiser(s.width, s.height, s.denoise, use_guides=True)
         panels = _panel_sources(source, last, s, spec)
         mover, travel = travel_by_frame(source, s.camera.follow, "reset_detection" in source.capabilities)
         multi_pass = bool(travel) and travel[source.frames[-1].key][1] > 1
@@ -521,7 +522,12 @@ def run_render(s: RenderSettings, log: Callable[[str], None] = tqdm.write, progr
                 direction = _direction_at(source, frame, body.index, sizes[body.index], s.blend)
                 fscene.set_textures(body.index, textures[body.index].update(value_r, direction))
             fscene.set_camera(pose)
-            rgb = denoiser(fscene.render(s.spp, seed=s.seed))
+            rendered = fscene.render(s.spp, seed=s.seed)
+            if isinstance(rendered, tuple):
+                rgb, albedo, normals = rendered
+                rgb = denoiser(rgb, albedo=albedo, normals=normals, to_sensor=fscene.to_sensor())
+            else:
+                rgb = denoiser(rendered)
             if s.keep_exr:
                 video.write_exr(exr_dir / f"frame_{i:06d}.exr", rgb)
             ldr = video.tonemap(rgb, s.exposure)
