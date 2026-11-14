@@ -61,7 +61,7 @@ class FieldDisplay:
     opacity: float = 0.9
 
 
-WearDisplay = FieldDisplay  # TextureFriction name
+WearDisplay = FieldDisplay  # Legacy public alias.
 
 
 def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:
@@ -83,3 +83,25 @@ def heatmap_albedo(
             alpha = display.opacity
         out[mask] = (1.0 - alpha) * albedo[mask] + alpha * colormap(w, hi=display.max)
     return out
+
+
+def heatmap_albedo_device(albedo, value, display: FieldDisplay = FieldDisplay(), threshold: float = 0.5 / 255.0):
+    """``heatmap_albedo`` on Dr.Jit CUDA arrays (``albedo`` Array3f, ``value`` Float, H x W texels row-major), so the
+    heatmap look keeps the GPU wear blend on the device. Same colours to float32 rounding."""
+    import drjit as dr
+    from drjit.cuda import Array3f, Float, UInt32
+
+    floor, lo, hi = 0.15, 0.0, display.max
+    x = dr.clip((value - lo) / max(hi - lo, 1e-12), 0.0, 1.0)
+    x = floor + (1.0 - floor) * x
+    pos = x * (len(_INFERNO) - 1)
+    i0 = UInt32(dr.clip(dr.floor(pos), 0, len(_INFERNO) - 2))
+    f = pos - Float(i0)
+    table = [Float(_INFERNO[:, c]) for c in range(3)]
+    cmap = Array3f(*((1.0 - f) * dr.gather(Float, t, i0) + f * dr.gather(Float, t, i0 + 1) for t in table))
+    if display.ramp > 0.0:
+        s = dr.clip(value / max(display.ramp, 1e-12), 0.0, 1.0)
+        alpha = display.opacity * (s * s * (3.0 - 2.0 * s))
+    else:
+        alpha = Float(display.opacity)
+    return dr.select(value > threshold, (1.0 - alpha) * albedo + alpha * cmap, albedo)

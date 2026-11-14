@@ -1,237 +1,127 @@
-# Mitsuba Rendering Application
+# MistubaVideo
 
-A Python application for rendering 3D scenes with Mitsuba 3, focusing on batch processing of OBJ files and creating animations.
+[![Tests](https://github.com/ETSim/MistubaVideo/actions/workflows/mitsuba-video.yml/badge.svg)](https://github.com/ETSim/MistubaVideo/actions/workflows/mitsuba-video.yml)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](packages/mitsuba_video/pyproject.toml)
+[![Mitsuba](https://img.shields.io/badge/Mitsuba-3.9.x-orange)](https://pypi.org/project/mitsuba/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-## Features
+Render a simulation frame by frame with Mitsuba 3, inspect the PNGs, then encode a video. Use manifests from your project, OpenUSD stages, or installed source plugins. Scalar fields and material transitions are optional.
 
-- Render sequences of OBJ files with Mitsuba 3
-- Create videos and GIFs from rendered frames
-- Support for both CPU and CUDA GPU rendering
-- Configurable rendering parameters (resolution, samples per pixel)
-- Multi-threaded rendering for improved performance
-- Detailed timing reports and performance statistics
-- Field and wear videos of moving bodies from any project (`mitsuba-video`, see [Field and wear videos](#field-and-wear-videos-mitsuba-video))
+![Mitsuba-rendered animation of a rotating blue cube following a ballistic arc](docs/images/cube-throw.gif)
 
-## Installation
+This generated cube toss uses plain materials and prescribed ballistic motion. [View the frame strip](docs/images/cube-throw.png). Recreate both with `python examples/render_readme.py --animate` after installation.
 
-### Prerequisites
+## Install
 
-- Python 3.8 or higher
-- [Mitsuba 3](https://www.mitsuba-renderer.org/) 
-- FFmpeg (for video and GIF creation)
-
-### Setup
-
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/ETSim/MistubaVideo
-   cd mitsuba
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-## Usage
-
-### Basic Usage
-
-Render multiple OBJ files from a folder:
+Python 3.10 or newer is required for `mitsuba-video`. The older `main.py` application requires Python 3.11 or newer. Install FFmpeg to encode MP4 or GIF output.
 
 ```bash
-python main.py multi --folder exports --regex "\d+\.obj"
+git clone https://github.com/ETSim/MistubaVideo.git
+cd MistubaVideo
+python -m venv .venv
+# Windows PowerShell: .venv\Scripts\Activate.ps1
+# Linux/macOS: source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e "packages/mitsuba_video[usd,notebook]"
+mitsuba-video doctor
 ```
 
-### Command-line Options
+With uv, use `uv venv` and `uv pip install -e "packages/mitsuba_video[usd,notebook]"`, then activate the environment. The core has no simulator or HDF5 dependency. Source adapters are installed as plugins.
 
-```
-Options:
-  -f, --folder TEXT               Folder containing OBJ files  [required]
-  -r, --regex TEXT                Regex pattern for OBJ filenames  [default: \d+\.obj]
-  -n, --name TEXT                 Base name for output files  [default: multi_obj]
-  -t, --threaded                  Enable multi-threading
-  -w, --workers INTEGER           Max worker threads (if threaded)
-  --video / --no-video            Enable video creation  [default: video]
-  --gif / --no-gif                Enable GIF creation  [default: gif]
-  -d, --device TEXT               Rendering device (cpu/cuda)  [default: cpu]
-  -s, --spp INTEGER               Samples per pixel  [default: 256]
-  --width INTEGER                 Output image width  [default: 1920]
-  --height INTEGER                Output image height  [default: 1080]
-  -o, --output TEXT               Output directory  [default: output]
-  --max-depth INTEGER             Maximum ray bounces  [default: 8]
-```
-
-### Additional Commands
-
-Show information about the Mitsuba configuration:
+## Render your first frames
 
 ```bash
-python main.py info
+mitsuba-video fixture output/demo --kind cube-throw --frames 24
+mitsuba-video inspect output/demo
+mitsuba-video render output/demo -q preview --look plain --no-panel --no-chart --no-encode
 ```
 
-## Field and wear videos (`mitsuba-video`)
-
-[`packages/mitsuba_video`](packages/mitsuba_video/README.md) is a generic renderer for rigid bodies whose UV atlases carry a per-texel field (wear, damage, temperature...). For each frame it:
-
-- path-traces the bodies at their recorded poses, with a field-driven material blend and heatmap;
-- adds a UV atlas panel and a covered-area chart.
-
-It then encodes an mp4. Unlike `multi`, it uses textures and per-frame transforms.
-
-Inputs come from pluggable sources:
-
-- **`manifest`:** a versioned JSON any project can write with `ManifestWriter`.
-- **`texturefriction`:** TextureFriction `--record` runs.
+Open `output/demo/render_plain/beauty/` for the 3D images or `frames/` for frames with the time label. Each selected input frame produces one numbered PNG. Rendering and video encoding are separate steps:
 
 ```bash
-pip install -e "packages/mitsuba_video[texturefriction]"     # installs `mitsuba-video` and `tf-render`
-mitsuba-video fixture demo && mitsuba-video render demo -q preview
-python main.py field render path/to/manifest.json -q paper --camera orbit --title "..."
-python main.py wear  render path/to/simulation_<ts> -q paper   # TextureFriction recordings
+mitsuba-video encode output/demo/render_plain --fps 40 --hold 0
+mitsuba-video render output/demo -q preview --look plain --no-panel --no-chart --no-encode --resume
 ```
 
-TextureFriction (ETSim/TextureWear) installs this package pinned by commit (`tools/render-requirements.txt` there). On Windows, prefer `mitsuba-video` / `tf-render` over `main.py field|wear` for long renders: they exit cleanly despite Mitsuba's teardown crash.
+`--resume` reuses completed frames and rejects changed render settings. Keep source files unchanged between runs. Use a new output folder when changing the scene. `--frames 0:120:2` renders every second frame in the first 120; `--frames -1:` renders the last frame.
 
-## Configuration
+Run `mitsuba-video tui` for guided terminal setup. It shows a reusable command before rendering. `mitsuba-video doctor --variant cuda` performs a small render to check the backend and reports FFmpeg and optional input support. Long renders show frame counts, ETA and render/blend times.
 
-The application can be configured through a `config.json` file:
+## Input formats
 
-```json
-{
-    "OUTPUT_FOLDER": "output",
-    "EXR_FOLDER": "exr",
-    "PNG_FOLDER": "png",
-    "VIDEO_FOLDER": "video",
-    "GIF_FOLDER": "gif",
-    "SCENE_FOLDER": "scenes",
-    "MESH_FOLDER": "meshes",
-    "FRAMERATE": 30,
-    "MULTI_THREADED": false,
-    "ENABLE_GIF": true,
-    "ENABLE_VIDEO": true,
-    "ENABLE_EXR": true,
-    "ENABLE_PNG": true
-}
-```
+| Input | Example | Support |
+|---|---|---|
+| Manifest | `mitsuba-video render path/to/manifest.json` | OBJ meshes, textures, poses and per-frame scalar fields |
+| OpenUSD | `mitsuba-video render scene.usda --look plain` | `.usd`, `.usda`, `.usdc`, `.usdz`; polygon meshes and rigid transform animation |
+| OBJ sequence | `python main.py multi --folder exports` | Older batch interface; install `requirements.txt` first |
 
-## Project Structure
+USD imports stage units and the up axis, parent transforms, static scale, normals, `st` UVs and constant `UsdPreviewSurface` diffuse colour, roughness and metallic values. It samples each time code; use `-O step=2` to sample every other time code. The renderer supplies its own cameras and lights. USD does not supply wear fields. See [the USD guide](docs/usd.md) for supported features and export requirements.
 
-```
-mitsuba/
-├── main.py                # Main CLI entry point
-├── config.json            # Application configuration
-├── src/
-│   ├── assets/            # Static assets (scenes, schemas)
-│   ├── env/               # Environment map handling
-│   ├── processing/        # Processing utilities
-│   │   ├── ffmpeg.py      # FFmpeg video processing
-│   │   ├── image.py       # Image conversion
-│   │   ├── meshes.py      # Mesh file handling
-│   │   ├── scene.py       # Scene XML generation
-│   │   └── xml.py         # XML processing
-│   ├── renderers/         # Renderer implementations
-│   │   ├── base.py        # Base renderer class
-│   │   └── multi.py       # Multi-object renderer
-│   └── utils/             # Utility modules
-│       ├── config.py      # Configuration handling
-│       ├── constants.py   # Application constants
-│       ├── environment.py # Environment setup
-│       ├── folder.py      # Folder operations
-│       ├── logger.py      # Logging utilities
-│       ├── mitsuba.py     # Mitsuba interface
-│       ├── timing.py      # Performance timing
-│       └── zip.py         # ZIP file handling
-└── tests/                 # Unit tests
-```
+## Optional fields and materials
 
-## Docker Support
-
-A Dockerfile and docker-compose.yml are provided for containerized execution:
+Animations render with `--look plain` by default. For a scalar-field example:
 
 ```bash
-# Build the container
-docker-compose build
-
-# Run the application
-docker-compose run mitsuba python main.py multi --folder /data/exports
+mitsuba-video fixture output/temperature --kind temperature
+mitsuba-video render output/temperature --look heatmap -q preview
+mitsuba-video fixture output/damage --kind damage
+mitsuba-video render output/damage --look material -q preview
 ```
 
-# Multiple Camera Views in Mitsuba Renderer
-
-This guide explains how to render objects from multiple camera angles using the Mitsuba renderer.
-
-## Available Camera Views
-
-The following camera views are available:
-
-- `front` - View from the front (positive Z axis)
-- `back` - View from the back (negative Z axis)
-- `left` - View from the left side (negative X axis)
-- `right` - View from the right side (positive X axis)
-- `top` - View from above (positive Y axis)
-- `bottom` - View from below (negative Y axis)
-- `perspective` - Default 3/4 perspective view (from a corner)
-
-## Command-line Usage
-
-To render with specific camera views, use the `--view` option (can be specified multiple times):
+`--look material` blends base and affected appearances with the selected field. `--look heatmap` adds a labelled
+overlay. The older `worn` look and material key remain compatible. Surface shading is independent:
 
 ```bash
-python main.py multi --folder models --view front --view top --view right
+mitsuba-video render output/demo --shading diffuse --out output/diffuse
+mitsuba-video render output/demo --shading metallic --out output/metallic
+mitsuba-video render output/demo --shading ao --out output/ao
 ```
 
-To render all standard camera views in one command:
+PBR uses albedo, roughness, tangent-space normal and metallic maps. Diffuse removes the specular lobe; metallic forces a metallic surface for appearance checks. AO casts hemisphere rays with a range of 20% of the scene bounding diagonal and shows geometric occlusion in greyscale.
+
+Manifest `base` and `affected` appearances accept `metallic` as a value or image path and `ao` as an image path. AO textures multiply albedo in linear colour space as an artistic approximation; path tracing already calculates light transport. MTL inputs accept `map_Pm` and `map_AO`, including `_worn` variants. An affected stage can expose a different material as a field changes.
+
+Field material interpolation supports two or four stages, scalar remapping, height shaping and spherical normal
+interpolation. These utilities do not assign physical meaning to the scalar values. [Material and source API
+details](packages/mitsuba_video/README.md).
+
+`--face-normals` gives meshes a faceted appearance, matching the effect of Mitsuba's OBJ `face_normals=true`. By default, authored or computed vertex normals are interpolated. Normal maps can still add surface detail; `--normal-strength 0` flattens them for geometry comparisons.
+
+`--displacement-scale 0.002` offsets existing mesh vertices along their normals by `0.002 * (height - 0.5)` in world units. It uses the base height map once before animation, and defaults to zero. This is minimal static displacement: it does not subdivide the mesh or animate worn height. Use a dense mesh for silhouette detail. The notebook includes a generated height-map example.
+
+## GPU and rendering speed
+
+Mitsuba 3.9.x and its matching Dr.Jit dependency are installed together. `--variant auto` tries CUDA on NVIDIA, Metal on Apple Silicon, LLVM on CPU, then scalar CPU. Explicit `--variant cuda`, `metal`, `cpu` and `scalar` choices are available. A backend must pass a small render before selection.
+
+Start with `-q preview` (960Ãƒâ€”540, 16 samples/pixel). `draft` uses 1280Ãƒâ€”720/64; `paper` uses 1920Ãƒâ€”1080/256. Override with `--res 640x360 --spp 16`. Lower samples and resolution reduce rendering work; compare noise before producing the final video. NVIDIA users can try `--denoise` for OptiX with albedo and normal guides. Check fine surface detail for smoothing.
+
+The scene is built once. Unchanged poses skip geometry uploads, unchanged fields skip texture blending, and CPU blends update only changed tiles where supported. `--blend-device auto` uses CUDA for supported terms; burnish and edge-wear terms use CPU. Read `timing_s_per_frame` in `render_config.json` to see where your scene spends time. GPU rendering and GPU field blending are separate choices. Performance depends on scene size, samples, textures and hardware.
+
+Blender is also available through `--backend cycles` or `--backend eevee` when installed. These backends save an animated `scene.blend`. Composite labels can be changed with `--annotate labels.json --resume --recompose` without rendering the beauty frames again. `--displace` retains the optional subdivided, animated height-map path; `--displacement-scale` is the simpler static option.
+
+## Source plugins
+
+Simulation-specific readers and options belong to external plugins. [The plugin guide](docs/plugins.md) explains entry points and the TextureFriction adapter migration. Installing the core does not install a recording reader.
+
+## Notebook
+
+[The tutorial notebook](notebooks/getting_started.ipynb) covers the cube toss, multiple camera views, a frame sequence, video encoding, faceted normals, minimal displacement and USD. Run `jupyter lab notebooks/getting_started.ipynb` from the repository root and select the installed environment's kernel.
+
+[The usage guide](docs/guide.md) walks through the commands. A reusable [Codex skill](.agents/skills/mitsuba-video/SKILL.md) is included for working with this repository.
+
+## Development
 
 ```bash
-python main.py multi --folder models --all-views
+python -m pip install -e "packages/mitsuba_video[test]"
+python -m pytest packages/mitsuba_video/tests -q
+python -m ruff check packages/mitsuba_video
+python -m build packages/mitsuba_video
 ```
 
-## Example Workflows
+Tests cover blend math, maps, manifests, USD animation, terminal setup, resume safety and real small renders. CI runs Linux and Windows tests and rendering checks. GPU checks skip when CUDA is unavailable. The installable package lives in `packages/mitsuba_video/`; `src/` and `main.py` retain the older OBJ application. Generated output stays under the ignored `output/` directory.
 
-### Orthographic Views for Technical Documentation
+For a CPU container, use `docker compose run --rm mitsuba-renderer --help`. NVIDIA rendering additionally needs NVIDIA Container Toolkit; build the image, then run `docker run --rm --gpus all mitsuba-video doctor --variant cuda`.
 
-To generate orthographic views for technical documentation:
+The [publishing workflow](docs/publishing.md) builds and checks the distribution. Configure a PyPI trusted publisher before enabling uploads.
 
-```bash
-python main.py multi --folder models --view front --view top --view right --view left
-```
-
-### Full 360° Product Visualization
-
-To create a complete 360° visualization:
-
-```bash
-python main.py multi --folder models --all-views
-```
-
-### Customizing Camera Distance
-
-The default camera distance is 4.0 units. You can adjust this in the code by modifying the `CameraUtils.get_camera_transform` function.
-
-## Programmatic Usage
-
-You can also use the camera view functionality in your Python code:
-
-```python
-from src.mitsuba.camera import CameraUtils
-
-# Get a camera transform for a specific view
-transform = CameraUtils.get_camera_transform("front", distance=5.0)
-
-# Format the transform for XML
-xml_transform = CameraUtils.format_transform_for_xml(transform)
-```
-
-## Rendered Output
-
-For each camera view, the renderer will create separate output files with the view name in the filename. For example:
-
-- `multi_obj_frame_0_front.png`
-- `multi_obj_frame_0_top.png`
-- `multi_obj_frame_0_right.png`
-
-
-## License
-
-[MIT License](LICENSE)
+[MIT license](LICENSE)

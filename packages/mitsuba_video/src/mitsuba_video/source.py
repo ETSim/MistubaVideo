@@ -1,9 +1,7 @@
-"""The ``Source`` protocol every input format implements, plus the plugin registry.
+"""Sources provide geometry, poses and optional scalar fields.
 
-A source is a time sequence of rigid bodies (mesh + material + pose per frame) with one or more per-texel scalar
-*fields* in each body's UV atlas. Built-in sources: ``texturefriction`` (TextureFriction ``--record`` HDF5) and
-``manifest`` (versioned JSON any project can write, see ``sources/manifest``). Third-party packages register more
-under the ``mitsuba_video.sources`` entry-point group with a class implementing this protocol.
+Manifest and USD inputs are built in. Other projects register source classes under
+``mitsuba_video.sources`` and optional example writers under ``mitsuba_video.fixtures``.
 """
 
 from __future__ import annotations
@@ -20,9 +18,27 @@ from .model import Body, FieldSpec, Frame
 
 ENTRY_POINT_GROUP = "mitsuba_video.sources"
 BUILTIN_SOURCES = {
-    "texturefriction": "mitsuba_video.sources.texturefriction:TextureFrictionSource",
     "manifest": "mitsuba_video.sources.manifest:ManifestSource",
+    "usd": "mitsuba_video.sources.usd:UsdSource",
 }
+
+
+def field_value(source: Source, frame: Frame, body_index: int, name: str | None = None) -> np.ndarray | None:
+    """Read a scalar field only when the source declares one."""
+    return source.field(frame, body_index, name) if source.fields else None
+
+
+def available_fixtures() -> dict[str, Callable[[], Callable]]:
+    """Fixture writers supplied by the renderer or installed plugins."""
+    found = {
+        "cube-throw": lambda: _load("mitsuba_video.sources.manifest.cube_throw:write_cube_throw"),
+        "manifest": lambda: _load("mitsuba_video.sources.manifest.fixture:write_synthetic_manifest"),
+        "temperature": lambda: _load("mitsuba_video.sources.manifest.fixture:write_temperature_manifest"),
+        "damage": lambda: _load("mitsuba_video.sources.manifest.fixture:write_damage_manifest"),
+    }
+    for ep in metadata.entry_points(group="mitsuba_video.fixtures"):
+        found.setdefault(ep.name, ep.load)
+    return found
 
 
 @runtime_checkable
@@ -48,10 +64,6 @@ class Source(Protocol):
 
     def pose(self, frame: Frame) -> tuple[np.ndarray, np.ndarray]:
         """(positions [N, 3], orientations [N, 4] as (w, x, y, z)), indexed by ``Body.index``."""
-        ...
-
-    def field(self, frame: Frame, body_index: int, name: str | None = None) -> np.ndarray | None:
-        """HxW float32 in [0, 1] (row 0 = V = 1) for ``name`` (default: the primary field), or None."""
         ...
 
     def describe(self) -> list[tuple[str, str]]:
@@ -92,7 +104,7 @@ def detect_kind(path: Path) -> str:
             if loader().probe(Path(path)):
                 return name
         except ImportError:
-            continue  # optional dependency missing (e.g. h5py for texturefriction)
+            continue  # optional dependency missing (a plugin dependency)
     raise ValueError(f"no source recognises {path}; pass --source explicitly")
 
 

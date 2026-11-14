@@ -1,4 +1,4 @@
-"""Convert any source into a manifest (e.g. a TextureFriction recording, to hand to people without h5py).
+"""Convert an installed source into a portable manifest of meshes, poses and optional fields.
 
 Materials are baked to images at ``material_size`` (base/worn albedo, roughness, normal, height), fields to 8-bit
 PNG. Poses and fields round-trip exactly for 8-bit sources; baked materials are 8-bit quantised.
@@ -25,6 +25,8 @@ def _bake(writer: ManifestWriter, prefix: str, maps: MapSet) -> dict:
     }
     if maps.height is not None:
         out["height"] = writer.write_image(f"{prefix}_height.png", maps.height)
+    if maps.metallic is not None:
+        out["metallic"] = writer.write_image(f"{prefix}_metallic.png", maps.metallic)
     return out
 
 
@@ -48,13 +50,15 @@ def export_manifest(
         spec = source.fields[name]
         writer.add_field(name, label=spec.label, threshold=spec.threshold, video_prefix=spec.video_prefix,
                          area_title=spec.area_title)  # fmt: skip
-    writer.data["primary_field"] = source.primary_field if source.primary_field in names else names[0]
+    if names:
+        writer.data["primary_field"] = source.primary_field if source.primary_field in names else names[0]
     for body in source.bodies:
         size = fit_size(body.material.preferred_size(), material_size)
         base, worn = body.material.build(size, NormalOptions(recenter_above_deg=0.0), log)
         material = {"base": _bake(writer, f"materials/body_{body.index}_base", base),
                     "worn": _bake(writer, f"materials/body_{body.index}_worn", worn)}  # fmt: skip
-        material["base"]["metallic"] = float(body.material.metallic)
+        material["base"].setdefault("metallic", float(body.material.metallic))
+        material["worn"].setdefault("metallic", float(body.material.metallic))
         writer.add_body(body.index, body.name, body.vertices, body.normals, body.uvs, body.faces,
                         scale=body.scale, fixed=body.fixed, material=material)  # fmt: skip
     for frame in tqdm(source.frames, desc="export", unit="frame", disable=not progress):

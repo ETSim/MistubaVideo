@@ -2,7 +2,7 @@ typer[all]
 rich>=13.0.0
 python-dotenv>=1.0.0
 jsonschema>=4.17.3
-mitsuba>=3.0.0
+mitsuba>=3.9,<3.10
 rpds>=0.12.0
 xmltodict>=0.13.0
 xmlschema>=2.3.0
@@ -13,5 +13,4 @@ imageio[opencv]
 pillow>=10.0.0
 gradio>=3.36.0
 coverage
-tqdm
--e ./packages/mitsuba_video[texturefriction]
+-e ./packages/mitsuba_video

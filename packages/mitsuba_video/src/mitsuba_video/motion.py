@@ -7,14 +7,17 @@ import numpy as np
 from .model import Body
 from .source import Source
 
+#: A step this many times the 90th-percentile step is a teleport back to the start, not motion.
+RESET_STEP_FACTOR = 10.0
+
 
 def travel_by_frame(
     source: Source, follow: int | None = None, detect_resets: bool = False
 ) -> tuple[Body | None, dict[str, tuple[float, int]]]:
     """Cumulative distance and pass number of the tracked (or first dynamic) body, per frame key.
 
-    With ``detect_resets`` (sources whose scenarios teleport a body back to its start), a step far above the median
-    step counts as a reset: it starts a new pass instead of adding to the distance.
+    With ``detect_resets`` (sources whose scenarios teleport a body back to its start), a step far above a typical
+    moving step counts as a reset: it starts a new pass instead of adding to the distance.
     """
     mover = next((b for b in source.bodies if b.index == follow), None) or next(
         (b for b in source.bodies if not b.fixed), None
@@ -24,7 +27,10 @@ def travel_by_frame(
     track = np.array([source.pose(f)[0][mover.index] for f in source.frames])
     steps = np.r_[0.0, np.linalg.norm(np.diff(track, axis=0), axis=1)]
     if detect_resets:
-        is_reset = steps > max(10.0 * float(np.median(steps)), 1e-9)
+        # The reference is a typical *moving* step (90th percentile), not the median: a thrown body spends most
+        # frames at rest, and a median near zero turned every frame of its flight into a "reset".
+        reference = float(np.percentile(steps, 90)) if steps.size > 1 else 0.0
+        is_reset = steps > max(RESET_STEP_FACTOR * reference, 1e-9)
     else:
         is_reset = np.zeros_like(steps, dtype=bool)
     slid = np.cumsum(np.where(is_reset, 0.0, steps))

@@ -4,7 +4,7 @@
   "title": "mitsuba-video manifest v1",
   "description": "Rigid bodies with per-frame poses and per-texel scalar fields in their UV atlases. Paths are relative to the manifest file.",
   "type": "object",
-  "required": ["format", "version", "bodies", "fields"],
+  "required": ["format", "version", "bodies"],
   "additionalProperties": false,
   "properties": {
     "format": {"const": "mitsuba-video.manifest"},
@@ -19,7 +19,7 @@
     "travel_label": {"type": "string"},
     "fields": {
       "type": "object",
-      "minProperties": 1,
+      "minProperties": 0,
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
@@ -108,7 +108,8 @@
         "roughness": {"$ref": "#/$defs/scalarOrMap"},
         "normal": {"type": "string"},
         "height": {"type": "string"},
-        "metallic": {"type": "number", "minimum": 0, "maximum": 1}
+        "metallic": {"oneOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "string"}]},
+        "ao": {"type": "string"}
       }
     },
     "material": {
@@ -119,7 +120,7 @@
         },
         {
           "type": "object", "required": ["base"], "additionalProperties": false,
-          "properties": {"base": {"$ref": "#/$defs/appearance"}, "worn": {"$ref": "#/$defs/appearance"}}
+          "properties": {"base": {"$ref": "#/$defs/appearance"}, "affected": {"$ref": "#/$defs/appearance"}, "worn": {"$ref": "#/$defs/appearance"}}
         }
       ]
     }

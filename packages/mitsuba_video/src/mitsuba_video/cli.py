@@ -4,12 +4,11 @@
     mitsuba-video preview SOURCE                                             fast low-res check of framing/look
     mitsuba-video inspect SOURCE                                             what the source contains
     mitsuba-video encode  OUT [--fps 24] [--title ...]                       re-encode frames, no re-render
-    mitsuba-video fixture PATH --kind manifest|texturefriction               tiny synthetic input
+    mitsuba-video fixture PATH --kind cube-throw|manifest               tiny synthetic input
     mitsuba-video validate MANIFEST | export manifest SOURCE OUT | sources | version
 
-``SOURCE`` is anything a registered source accepts: a ``manifest.json`` (or its folder), a TextureFriction
-``simulation_<ts>/`` folder or ``.h5``... ``mitsuba-video SOURCE ...`` (no command) means ``render``.
-``tf-render`` is the same CLI with ``--source texturefriction`` as default.
+``SOURCE`` can be a manifest, USD stage or input provided by an installed source plugin.
+``mitsuba-video SOURCE ...`` is shorthand for ``mitsuba-video render SOURCE ...``.
 """
 
 from __future__ import annotations
@@ -37,13 +36,20 @@ from .pipeline import (
     resolve_field,
     run_render,
 )
-from .scene import LightingSettings
+from .scene import LightingSettings, Shading
 from .source import available_sources, open_source, parse_options
 
 P_OUT, P_QUALITY, P_CAMERA, P_LIGHT, P_FIELD, P_VIDEO, P_ADV = (
     "Output", "Quality", "Camera", "Lighting", "Field panel", "Video", "Advanced",
 )  # fmt: skip
-COMMANDS = {"render", "preview", "inspect", "encode", "fixture", "validate", "export", "sources", "version"}
+COMMANDS = {"render", "preview", "inspect", "encode", "fixture", "validate", "export", "sources", "version", "doctor", "tui"}
+
+
+class Backend(str, Enum):
+    mitsuba = "mitsuba"  # Mitsuba 3 path tracer (default)
+    cycles = "cycles"  # Blender Cycles path tracer (mitsuba_video.blender)
+    eevee = "eevee"  # Blender EEVEE rasteriser: fast, approximate
+
 
 
 class CameraMode(str, Enum):
@@ -62,18 +68,17 @@ def _resolution(res: str | None, quality: Quality, spp: int | None) -> tuple[int
             width, height = (int(v) for v in res.lower().split("x"))
         except ValueError as exc:
             raise typer.BadParameter(f"--res {res!r} is not WIDTHxHEIGHT") from exc
-    return width, height, spp or preset_spp
+    samples = preset_spp if spp is None else spp
+    if min(width, height, samples) <= 0:
+        raise typer.BadParameter("resolution and samples per pixel must be positive")
+    return width, height, samples
 
 
-def _source_options(option: list[str], scale: list[str], assets: list[Path]) -> dict[str, object]:
+def _source_options(option: list[str]) -> dict[str, object]:
     try:
         opts: dict[str, object] = dict(parse_options(option))
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    if scale:
-        opts["scale"] = ",".join(scale)
-    if assets:
-        opts["assets"] = os.pathsep.join(str(a) for a in assets)
     return opts
 
 
@@ -82,17 +87,16 @@ def _fail(exc: Exception) -> typer.Exit:
     return typer.Exit(1)
 
 
-def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> typer.Typer:  # noqa: C901
-    """The CLI, with ``default_source`` as the ``--source`` default (``tf-render`` uses "texturefriction")."""
-    fixture_kind = default_source if default_source in ("manifest", "texturefriction") else "manifest"
+def build_app(default_source: str = "auto", prog: str = "mitsuba-video",
+              default_look: Look = Look.plain, fixture_kind: str = "cube-throw") -> typer.Typer:  # noqa: C901
+    """Build a general renderer CLI; source plugins can choose their own defaults."""
     app = typer.Typer(
         add_completion=False,
         no_args_is_help=True,
         pretty_exceptions_enable=False,
-        help="Path-traced videos of rigid bodies with per-texel fields (wear, damage, temperature...) "
-        "using Mitsuba 3.",
+        help="Render 3D frame sequences and videos with Mitsuba 3. Scalar fields and material transitions are optional.",
     )
-    source_help = "Input: manifest.json / folder, TextureFriction simulation_<ts>/ or .h5, ..."
+    source_help = "Input: a manifest, USD stage, or any installed source plugin"
 
     def run(settings: RenderSettings) -> None:
         try:
@@ -103,6 +107,22 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
     @app.command()
     def render(
         source: Path = typer.Argument(..., exists=True, help=source_help),
+        rr_depth: int = typer.Option(5, help="Bounce at which Russian roulette starts (lower = faster)",
+                                     rich_help_panel=P_QUALITY),
+        recompose: bool = typer.Option(False, help="With --resume: rebuild the composited frames (panels, chart, "
+                                       "header) from the saved beauty frames, path tracing only frames without one"),
+        annotate: Path = typer.Option(None, exists=True, dir_okay=False, help="JSON of composite-only labels (body "
+                                      "tags, panel titles, colour bar unit; see mitsuba_video.annotate); not part "
+                                      "of the resume signature, so --resume --recompose re-labels a finished render",
+                                      rich_help_panel=P_FIELD),
+        backend: Backend = typer.Option(Backend.mitsuba, help="Renderer: mitsuba, or Blender cycles / eevee (same "
+                                        "scene, poses, camera, lights and field textures; also saves "
+                                        "<out>/blender/scene.blend)", rich_help_panel=P_ADV),
+        blender: str = typer.Option(None, help="Blender executable for --backend cycles/eevee [default: BLENDER, "
+                                    "blender on PATH, newest install]", rich_help_panel=P_ADV),
+        displace: float = typer.Option(0.0, help="Displace the meshes by each frame's blended height map: millimetres "
+                                       "for the full 0..1 height range, inward from the asperity tops (0 = off; "
+                                       "subdivides each body up to 1.5M triangles, 6M per scene)", rich_help_panel=P_QUALITY),
         source_kind: str = typer.Option(default_source, "--source", help="Source type (auto-detected by default); "
                                         "see `sources`", rich_help_panel=P_OUT),
         option: list[str] = typer.Option([], "-O", "--option", help="Source option KEY=VALUE (repeatable)",
@@ -111,8 +131,13 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                                   rich_help_panel=P_OUT),
         out: Path = typer.Option(None, "--out", "-o", help="Output directory [default: <source>/render_<look>]",
                                  rich_help_panel=P_OUT),
-        look: Look = typer.Option(Look.heatmap, help="heatmap: affected material + field colormap; worn: appearance "
-                                  "only; plain: field ignored", rich_help_panel=P_OUT),
+        look: Look = typer.Option(default_look, help="plain: original material; material: field-driven appearance; heatmap: field overlay", rich_help_panel=P_OUT),
+        shading: Shading = typer.Option(Shading.pbr, help="pbr | diffuse | metallic | ao", rich_help_panel=P_OUT),
+        face_normals: bool = typer.Option(False, help="Use geometric face normals for a faceted mesh",
+                                         rich_help_panel=P_QUALITY),
+        displacement_scale: float = typer.Option(0.0, help="Static base-height displacement in world units; 0 disables. "
+                                                "Offsets existing vertices by scale*(height-0.5); no subdivision",
+                                                rich_help_panel=P_QUALITY),
         frames: str = typer.Option("::1", help="Python slice over source frames, e.g. 0:300:2", rich_help_panel=P_OUT),
         resume: bool = typer.Option(False, help="Reuse frames already in --out (settings must match)",
                                     rich_help_panel=P_OUT),
@@ -122,6 +147,9 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
         spp: int = typer.Option(None, help="Samples per pixel, overrides --quality", rich_help_panel=P_QUALITY),
         max_depth: int = typer.Option(8, help="Maximum path depth", rich_help_panel=P_QUALITY),
         max_texture: int = typer.Option(2048, help="Cap on per-body texture resolution", rich_help_panel=P_QUALITY),
+        blend_device: str = typer.Option("auto", help="Field material blend on cpu (numpy), gpu (Dr.Jit CUDA) or auto (gpu when "
+                                         "available and the blend has no CPU-only term)", rich_help_panel=P_QUALITY),
+        cavity_ao: float = typer.Option(0.0, help="Optional height-derived cavity occlusion strength, 0..1", rich_help_panel=P_QUALITY),
         normal_strength: float = typer.Option(1.0, help="Scale normal-map detail (1 = as authored, 0 = flat)",
                                               rich_help_panel=P_QUALITY),
         normal_recenter: float = typer.Option(5.0, help="Recentre normal maps whose mean tilt exceeds this many "
@@ -151,12 +179,12 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                                        "stays, e.g. to film a worn underside from below", rich_help_panel=P_FIELD),
         chart: bool = typer.Option(True, help="Covered-area vs time chart (data also written as CSV)",
                                    rich_help_panel=P_FIELD),
-        display_max: float = typer.Option(1.0, "--display-max", "--wear-display-max", help="Top of the colormap "
+        display_max: float = typer.Option(1.0, "--display-max", help="Top of the colormap "
                                           "(display only); below 1 the colour bar reads 'display range 0-max "
                                           "(preview)'", rich_help_panel=P_FIELD),
-        ramp: float = typer.Option(0.0, "--ramp", "--wear-ramp", help="Overlay opacity ramps 0 -> opacity over "
+        ramp: float = typer.Option(0.0, "--ramp", help="Overlay opacity ramps 0 -> opacity over "
                                    "[0, ramp] (display only; 0 = flat)", rich_help_panel=P_FIELD),
-        opacity: float = typer.Option(0.9, "--opacity", "--wear-opacity", help="Heatmap overlay opacity",
+        opacity: float = typer.Option(0.9, "--opacity", help="Heatmap overlay opacity",
                                       rich_help_panel=P_FIELD),
         fps: float = typer.Option(30.0, help="Video frame rate", rich_help_panel=P_VIDEO),
         title: str = typer.Option(None, help="Opening title card", rich_help_panel=P_VIDEO),
@@ -168,10 +196,6 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
         encode: bool = typer.Option(True, help="Encode the video after rendering", rich_help_panel=P_VIDEO),
         variant: str = typer.Option("auto", help="auto | cuda | llvm | cpu | scalar | <mitsuba variant>",
                                     rich_help_panel=P_ADV),
-        scale: list[str] = typer.Option([], help="TextureFriction: body scale override BODY=SCALE (= -O scale=...)",
-                                        rich_help_panel=P_ADV),
-        assets: list[Path] = typer.Option([], help="TextureFriction: extra root holding resources/ "
-                                          "(= -O assets=...)", rich_help_panel=P_ADV),
         denoise: bool = typer.Option(False, help="OptiX denoiser (CUDA only; check it helps on your driver)",
                                      rich_help_panel=P_ADV),
         seed: int = typer.Option(0, help="Sampler seed, fixed across frames for stable noise", rich_help_panel=P_ADV),
@@ -179,16 +203,22 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
     ) -> None:
         """Path trace every selected frame, composite the field panel and chart, and encode the video."""
         width, height, spp_ = _resolution(res, quality, spp)
-        options = _source_options(option, scale, assets)
-        up_axis = up or _source_up(source, source_kind, options)
+        options = _source_options(option)
+        source_up, source_blend = _source_defaults(source, source_kind, options)
+        up_axis = up or source_up
         run(
             RenderSettings(
                 source=source,
+                rr_depth=rr_depth, recompose=recompose, annotate=annotate,
+                backend=backend.value, blender=blender, displace_mm=displace,
                 source_kind=source_kind,
                 source_options=options,
                 field_name=field,
                 out=out,
                 look=look,
+                shading=shading,
+                face_normals=face_normals,
+                displacement_scale=displacement_scale,
                 width=width,
                 height=height,
                 spp=spp_,
@@ -201,8 +231,9 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                                           envmap=str(envmap) if envmap else None, ground=ground),
                 exposure=exposure,
                 max_texture=max_texture,
-                normals=NormalOptions(recenter_above_deg=normal_recenter, strength=normal_strength),
-                blend=_source_blend(source, source_kind, options),
+                blend_device=blend_device,
+                normals=NormalOptions(recenter_above_deg=normal_recenter, strength=normal_strength, cavity_ao=cavity_ao),
+                blend=source_blend,
                 display=FieldDisplay(max=display_max, ramp=ramp, opacity=opacity),
                 panel=panel,
                 panel_bodies=list(panel_body),
@@ -223,15 +254,16 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
         source_kind: str = typer.Option(default_source, "--source", help="Source type"),
         option: list[str] = typer.Option([], "-O", "--option", help="Source option KEY=VALUE (repeatable)"),
         out: Path = typer.Option(None, "--out", "-o", help="Output directory [default: <source>/render_preview]"),
-        look: Look = typer.Option(Look.heatmap, help="heatmap | worn | plain"),
+        look: Look = typer.Option(default_look, help="plain | material | heatmap"),
         camera: CameraMode = typer.Option(CameraMode.fixed, help="Camera path"),
         frames: str = typer.Option("::8", help="Python slice over source frames"),
         variant: str = typer.Option("auto", help="Mitsuba variant preference"),
     ) -> None:
         """960x540 at 16 spp on every 8th frame: check framing and look in a minute before a long render."""
         width, height, spp = QUALITY_PRESETS["preview"]
-        options = _source_options(option, [], [])
+        options = _source_options(option)
         base = Path(source) if Path(source).is_dir() else Path(source).parent
+        source_up, source_blend = _source_defaults(source, source_kind, options)
         run(
             RenderSettings(
                 source=source,
@@ -244,8 +276,8 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                 spp=spp,
                 frames=frames,
                 variant=variant,
-                camera=CameraSettings(mode=camera.value, up=_source_up(source, source_kind, options)),
-                blend=_source_blend(source, source_kind, options),
+                camera=CameraSettings(mode=camera.value, up=source_up),
+                blend=source_blend,
                 video=VideoSettings(fps=8.0, hold=1.0),
             )
         )
@@ -261,14 +293,14 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
         from .motion import travel_by_frame
 
         try:
-            src = open_source(source, source_kind, **_source_options(option, [], []))
+            src = open_source(source, source_kind, **_source_options(option))
         except (ValueError, FileNotFoundError) as exc:
             raise _fail(exc) from exc
         try:
             spec = resolve_field(src, field)
             for key, value in src.describe():
                 typer.echo(f"{key:<10} {value}")
-            typer.echo(f"{'source':<10} {src.kind}; fields {', '.join(src.fields)} (showing '{spec.name}')")
+            typer.echo(f"{'source':<10} {src.kind}; fields {', '.join(src.fields) or 'none'} (selected: {spec.name or 'none'})")
             frames = src.frames
             if frames:
                 dt = (frames[-1].time - frames[0].time) / max(len(frames) - 1, 1)
@@ -326,21 +358,17 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
 
     @app.command()
     def fixture(
-        path: Path = typer.Argument(..., help="Output: a folder (manifest) or an .h5 path (texturefriction)"),
-        kind: str = typer.Option(fixture_kind, help="manifest | texturefriction"),
-        frames: int = typer.Option(6, help="Number of frames"),
+        path: Path = typer.Argument(..., help="Output location for the chosen fixture"),
+        kind: str = typer.Option(fixture_kind, help="Fixture name (built-ins: cube-throw, manifest; plugins may add more)"),
+        frames: int = typer.Option(6, min=1, help="Number of frames"),
     ) -> None:
-        """Write a tiny synthetic input (plane + sliding box) for tests and smoke renders."""
-        if kind == "manifest":
-            from .sources.manifest.fixture import write_synthetic_manifest
+        """Generate a plain animation or a scalar-field example."""
+        from .source import available_fixtures
 
-            typer.echo(write_synthetic_manifest(path, frames=frames))
-        elif kind == "texturefriction":
-            from .sources.texturefriction.synthetic import write_synthetic
-
-            typer.echo(write_synthetic(path, frames=frames))
-        else:
-            raise typer.BadParameter("--kind is manifest or texturefriction")
+        factories = available_fixtures()
+        if kind not in factories:
+            raise typer.BadParameter(f"unknown fixture {kind!r}; available: {', '.join(sorted(factories))}")
+        typer.echo(factories[kind]()(path, frames=frames))
 
     @app.command()
     def validate(manifest: Path = typer.Argument(..., exists=True, help="manifest.json or its folder")) -> None:
@@ -369,7 +397,7 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
         from .sources.manifest.export import export_manifest
 
         try:
-            src = open_source(source, source_kind, **_source_options(option, [], []))
+            src = open_source(source, source_kind, **_source_options(option))
         except (ValueError, FileNotFoundError) as exc:
             raise _fail(exc) from exc
         try:
@@ -391,6 +419,26 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
                 typer.echo(f"{name:<16} unavailable ({exc})")
 
     @app.command()
+    def doctor(variant: str = typer.Option("auto", help="Backend to test with a tiny real render")) -> None:
+        """Check Mitsuba, GPU/CPU rendering, optional inputs and FFmpeg."""
+        from .terminal import doctor_report
+
+        if not doctor_report(variant):
+            raise typer.Exit(1)
+
+    @app.command()
+    def tui() -> None:
+        """Open an interactive terminal setup for a render."""
+        from .terminal import render_wizard
+
+        try:
+            settings = render_wizard(default_source)
+        except (ValueError, RuntimeError, FileNotFoundError) as exc:
+            raise _fail(exc) from exc
+        if settings is not None:
+            run(settings)
+
+    @app.command()
     def version() -> None:
         """Print mitsuba-video and Mitsuba versions."""
         typer.echo(f"{prog} {__version__}")
@@ -404,34 +452,20 @@ def build_app(default_source: str = "auto", prog: str = "mitsuba-video") -> type
     return app
 
 
-def _peek(source: Path, kind: str, options: dict[str, object]):
-    """Open a source briefly to read source-level defaults (up axis, blend parameters)."""
-    try:
-        return open_source(source, kind, **options)
-    except (ValueError, FileNotFoundError, ImportError):
-        return None
-
-
-def _source_up(source: Path, kind: str, options: dict[str, object]) -> str:
-    src = _peek(source, kind, options)
-    if src is None:
-        return "y"
-    try:
-        return src.up_axis
-    finally:
-        src.close()
-
-
-def _source_blend(source: Path, kind: str, options: dict[str, object]):
+def _source_defaults(source: Path, kind: str, options: dict[str, object]):
+    """Source-level defaults (up axis, blend parameters) from one brief open of the source."""
     from .blend import BlendParams
 
-    src = _peek(source, kind, options)
-    if src is None:
-        return BlendParams()
     try:
-        return getattr(src, "blend", None) or BlendParams()
+        src = open_source(source, kind, **options)
+    except (ValueError, FileNotFoundError, ImportError, RuntimeError):
+        return "y", BlendParams()
+    try:
+        return src.up_axis, getattr(src, "blend", None) or BlendParams()
     finally:
         src.close()
+
+
 
 
 app = build_app()
@@ -469,16 +503,3 @@ def run_main(application: typer.Typer, prog: str, argv: list[str] | None = None)
 
 def main(argv: list[str] | None = None) -> None:
     run_main(app, "mitsuba-video", argv)
-
-
-def tf_main(argv: list[str] | None = None) -> None:
-    """``tf-render`` console entry: checks the optional h5py dependency before importing the TextureFriction source."""
-    import importlib.util
-
-    if importlib.util.find_spec("h5py") is None:
-        print('tf-render reads TextureFriction HDF5 recordings and needs h5py: '
-              'pip install "mitsuba-video[texturefriction]"', file=sys.stderr)  # fmt: skip
-        sys.exit(2)
-    from .sources.texturefriction.cli import main as texturefriction_main
-
-    texturefriction_main(argv)

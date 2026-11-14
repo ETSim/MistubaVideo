@@ -170,3 +170,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Rendered frames, local datasets and tool caches
+/output/
+/exports/
+/logs/
+.ruff_cache/
+.uv-cache/

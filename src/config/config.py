@@ -52,7 +52,7 @@ DEFAULT_DENOISING_CONFIG = {
     "enabled": True,
     "type": "optix",
     "strength": 1.0,
-    "useGuideBuffers": False,
+    "useGuideBuffers": True,
     "useTemporal": False,
     "fallbackIfUnavailable": True,
     "applyToQuality": {
@@ -327,7 +327,7 @@ class Config:
         self.DENOISING_ENABLED = denoising_config.get("enabled", True)
         self.DENOISING_TYPE = denoising_config.get("type", "optix")
         self.DENOISING_STRENGTH = denoising_config.get("strength", 1.0)
-        self.DENOISING_USE_GUIDE_BUFFERS = denoising_config.get("useGuideBuffers", False)
+        self.DENOISING_USE_GUIDE_BUFFERS = denoising_config.get("useGuideBuffers", True)
         self.DENOISING_USE_TEMPORAL = denoising_config.get("useTemporal", False)
         self.DENOISING_FALLBACK = denoising_config.get("fallbackIfUnavailable", True)
         

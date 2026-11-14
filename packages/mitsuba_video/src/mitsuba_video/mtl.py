@@ -86,6 +86,8 @@ class MapImages:
     normal: np.ndarray | None = None  # HxWx3 uint8
     roughness: np.ndarray | None = None  # HxW uint8
     height: np.ndarray | None = None  # HxW uint8
+    metallic: np.ndarray | None = None
+    ao: np.ndarray | None = None
 
 
 def build_mapset(
@@ -98,11 +100,23 @@ def build_mapset(
     log: Callable[[str], None] | None,
 ) -> MapSet:
     albedo_tex = None if images.albedo is None else resize(images.albedo, size).astype(np.float32) / 255.0
+    albedo = np.array(tinted(albedo_tex, colour, size), dtype=np.float32)
+    if images.height is not None and normals.cavity_ao > 0:
+        from .color import linear_to_srgb, srgb_to_linear
+        from .maps import cavity_occlusion
+
+        factor = cavity_occlusion(scalar_map(images.height, 0.0, size), normals.cavity_ao)
+        albedo = linear_to_srgb(srgb_to_linear(albedo) * factor[..., None])
+    if images.ao is not None:
+        from .color import linear_to_srgb, srgb_to_linear
+
+        albedo = linear_to_srgb(srgb_to_linear(albedo) * scalar_map(images.ao, 1.0, size)[..., None])
     return MapSet(
-        albedo=np.array(tinted(albedo_tex, colour, size), dtype=np.float32),
+        albedo=albedo,
         roughness=scalar_map(images.roughness, roughness_default, size),
         normal=decode_normal(images.normal, size, normals, label, log),
         height=None if images.height is None else scalar_map(images.height, 0.0, size),
+        metallic=None if images.metallic is None else scalar_map(images.metallic, 0.0, size),
     )
 
 
@@ -127,6 +141,8 @@ class MtlMaterial:
             normal=self._image("map_Bump" + suffix, "RGB"),
             roughness=self._image("map_Pr" + suffix, "L"),
             height=self._image("map_disp" + suffix, "L"),
+            metallic=self._image("map_Pm" + suffix, "L"),
+            ao=self._image("map_AO" + suffix, "L"),
         )
 
     def preferred_size(self) -> tuple[int, int] | None:
@@ -137,7 +153,7 @@ class MtlMaterial:
         self, size: tuple[int, int], normals: NormalOptions, log: Callable[[str], None] | None
     ) -> tuple[MapSet, MapSet]:
         base_imgs, worn_imgs = self.images(False), self.images(True)
-        for key in ("albedo", "normal", "roughness", "height"):
+        for key in ("albedo", "normal", "roughness", "height", "metallic", "ao"):
             if getattr(worn_imgs, key) is None:
                 setattr(worn_imgs, key, getattr(base_imgs, key))
         colour = kd_colour(self.mtl, default=0.6 if base_imgs.albedo is None else 1.0)
@@ -145,4 +161,8 @@ class MtlMaterial:
         rough = pr if pr is not None and pr > 0.0 else DEFAULT_ROUGHNESS
         base = build_mapset(base_imgs, colour, rough, size, normals, f"{self.label} base", log)
         worn = build_mapset(worn_imgs, colour, rough, size, normals, f"{self.label} worn", log)
+        for maps, key in ((base, "Pm"), (worn, "Pm_worn")):
+            if maps.metallic is None:
+                value = scalar_entry(self.mtl, key)
+                maps.metallic = np.full((size[1], size[0]), self.metallic if value is None else value, np.float32)
         return base, worn
