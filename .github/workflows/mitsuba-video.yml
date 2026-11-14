@@ -32,7 +32,7 @@ jobs:
           echo "DRJIT_LIBLLVM_PATH=$lib" >> "$GITHUB_ENV"
 
       - name: Install
-        run: pip install "./packages/mitsuba_video[test]"
+        run: pip install ".[test]"
 
       - name: Lint
         run: python -m ruff check packages/mitsuba_video examples
@@ -42,7 +42,7 @@ jobs:
         run: python -m pytest -q
 
       - name: Build wheel and source distribution
-        run: python -m build packages/mitsuba_video
+        run: python -m build
 
       - name: Execute tutorial notebook
         run: python examples/verify_notebook.py
@@ -65,7 +65,7 @@ jobs:
         run: |
           python -m venv /tmp/pin
           /tmp/pin/bin/pip install --quiet \
-            "mitsuba-video @ git+https://github.com/${{ github.repository }}@${{ github.sha }}#subdirectory=packages/mitsuba_video"
+            "mitsuba-video @ git+https://github.com/${{ github.repository }}@${{ github.sha }}"
           /tmp/pin/bin/mitsuba-video version
 
       # Best effort: the org-wide artifact quota can be full, and the job has already passed by this point.
@@ -87,7 +87,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: pip install "./packages/mitsuba_video[test]"
+        run: pip install ".[test]"
       - name: Tests
         working-directory: packages/mitsuba_video
         run: python -m pytest -q -k "not render_smoke"

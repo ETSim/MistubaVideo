@@ -1,6 +1,6 @@
 # Publish mitsuba-video
 
-The distribution is built from `packages/mitsuba_video`, which contains the general renderer. Source plugins
+The distribution is built from the repository root; its package source is in `packages/mitsuba_video/src`. Source plugins
 publish independently. `scripts/tf` in TextureFriction owns its recording plugin and `tf-render` command.
 
 The `Publish mitsuba-video` workflow builds a wheel and source archive, checks their metadata, and tests the
@@ -17,7 +17,7 @@ Configure these values in the project's PyPI publishing settings, or as a pendin
 The [PyPI instructions](https://docs.pypi.org/trusted-publishers/adding-a-publisher/) describe how repository,
 workflow and environment identify the publisher. No long-lived PyPI token is needed.
 
-Update the version in `pyproject.toml` and `src/mitsuba_video/__init__.py` before a new release. Run the renderer
+Update the version in both `pyproject.toml` files and `packages/mitsuba_video/src/mitsuba_video/__init__.py` before a new release. Run the renderer
 tests and notebook, then merge the reviewed changes. Trigger a build-only run to inspect the distributions
 before publishing. Version 0.4 separates source plugins and defaults to geometry-only rendering; see
 [the migration guide](plugins.md).

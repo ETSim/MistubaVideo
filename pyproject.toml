@@ -1,30 +1,52 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mitsuba_scene_rendering"
-version = "0.2.0"
-description = "A modular Mitsuba 3 scene rendering project with video/GIF creation."
-readme = "README.md"
-requires-python = ">=3.11"
-dependencies = [
-    "typer[all]",
-    "rich",
-    "python-dotenv",
-    "jsonschema",
-    "mitsuba>=3.9,<3.10",
-    "rpds",
-    "xmltodict",
-    "xmlschema",
-    "numpy",
-    "tqdm",
-    "gradio"
-]
-authors = [
-    { name = "Antoine Boucher", email = "antoine@antoineboucher.info" }
-]
+name = "mitsuba-video"
+version = "0.4.0"
+description = "General-purpose Mitsuba frame and video rendering with optional scalar fields and source plugins"
+readme = "packages/mitsuba_video/README.md"
+requires-python = ">=3.10"
 license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "mitsuba>=3.9,<3.10",
+    "numpy>=1.24",
+    "Pillow>=10.1",
+    "typer>=0.9",
+    "tqdm>=4.60",
+    "jsonschema>=4",
+    "rich>=13",
+]
+
+[project.optional-dependencies]
+usd = ["usd-core>=25"]
+freeze = ["pyinstaller>=6,<7"]
+notebook = ["jupyterlab>=4", "ipykernel>=6"]
+test = ["pytest>=8", "usd-core>=25", "ruff>=0.9", "build>=1", "nbformat>=5", "nbclient>=0.10", "ipykernel>=6"]
+
+[project.scripts]
+mitsuba-video = "mitsuba_video.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ETSim/MistubaVideo"
+Documentation = "https://github.com/ETSim/MistubaVideo/blob/main/README.md"
+Issues = "https://github.com/ETSim/MistubaVideo/issues"
+
+[project.entry-points."mitsuba_video.sources"]
+manifest = "mitsuba_video.sources.manifest:ManifestSource"
+usd = "mitsuba_video.sources.usd:UsdSource"
+
+[tool.setuptools.packages.find]
+where = ["packages/mitsuba_video/src"]
+
+[tool.setuptools.package-data]
+"mitsuba_video.sources.manifest" = ["schema/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/mitsuba_video/tests"]
+addopts = "-p no:cacheprovider"
 
 [tool.ruff]
 target-version = "py310"
@@ -35,7 +57,3 @@ select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
 "packages/mitsuba_video/src/mitsuba_video/blend.py" = ["F401"]
-
-[tool.pytest.ini_options]
-testpaths = ["packages/mitsuba_video/tests"]
-addopts = "-p no:cacheprovider"

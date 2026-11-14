@@ -1,7 +1,7 @@
-"""Mitsuba 3 scene for a recording: built once, then updated in place every frame.
+"""Build a Mitsuba scene once, then update its poses and textures for each frame.
 
-Bodies are ``mi.Mesh`` objects whose vertex positions/normals are rewritten per frame from the recorded pose
-(``T(x) * R(q) * S(scale)``); their textures are swapped through ``mi.traverse`` only when the wear changed.
+Each body is a ``mi.Mesh``. Vertices use ``T(x) * R(q) * S(scale)``; normals rotate with the body.
+Texture updates go through ``mi.traverse`` when the body's field changes.
 """
 
 from __future__ import annotations

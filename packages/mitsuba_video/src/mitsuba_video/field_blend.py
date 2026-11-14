@@ -64,7 +64,7 @@ class BlendParams:
     # Presentation terms the viewer does not have (0 = off). ``scratches``: strength of fine striations along the
     # recorded slide direction inside worn texels (``blend_stack``'s ``direction``). ``burnish`` in [0, 1]: a wider,
     # smooth wear mask (Gaussian, 10 texels at 1) with weaker height gating, so a stroke reads as one burnished track
-    # rather than the speckle of the individual asperity contacts. ``scratch_density``: the fraction of texels that
+    # formed from the individual asperity contacts. ``scratch_density``: the fraction of texels that
     # seed a grit streak (lower = fewer, more separate scratches). ``edge_wear``: worn texels on steep relief of the base
     # height (hole rims, ridges, grain edges) reach the worn stage sooner, as exposed edges do; 0 = off.
     scratches: float = 0.0

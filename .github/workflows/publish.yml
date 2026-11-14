@@ -20,11 +20,11 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install build twine
-      - run: python -m build packages/mitsuba_video
-      - run: python -m twine check packages/mitsuba_video/dist/*
+      - run: python -m build
+      - run: python -m twine check dist/*
       - name: Check standalone wheel
         run: |
-          python -m pip install packages/mitsuba_video/dist/*.whl
+          python -m pip install dist/*.whl
           mitsuba-video version
           mitsuba-video fixture /tmp/cube --frames 2
           mitsuba-video render /tmp/cube --out /tmp/render --res 64x36 --spp 2 --variant scalar --no-encode
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: python-distributions
-          path: packages/mitsuba_video/dist/*
+          path: dist/*
 
   publish:
     needs: build
