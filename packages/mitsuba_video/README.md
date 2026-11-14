@@ -4,6 +4,22 @@ Render 3D frames and videos with Mitsuba 3. Use it for animations, camera sweeps
 simulation output. Scalar fields on UV-mapped surfaces are optional: temperature, damage, wear, coverage and
 other quantities can drive a heatmap or a material transition.
 
+## Rendering workflow
+
+```mermaid
+flowchart TD
+    input["Manifest, USD or source plugin"] --> scene["Geometry, materials and poses"]
+    fields["Optional scalar fields"] -.-> scene
+    scene --> camera["Camera and lighting"]
+    camera --> render["Mitsuba or Blender"]
+    quality["Preview / Draft / Paper"] --> render
+    render --> beauty["3D PNGs and optional EXR"]
+    beauty --> compose["Labels and optional field panels"]
+    compose --> frames["Annotated PNG frames"]
+    frames --> encode["FFmpeg"]
+    encode --> video["MP4 or GIF"]
+```
+
 ## Install
 
 ```bash
@@ -82,8 +98,8 @@ and AO shows geometric hemisphere occlusion within 20% of the scene bounding dia
 using the base height map: `scale * (height - 0.5)` in world units. It does not subdivide or animate displacement;
 use a dense mesh for silhouette detail.
 
-The field material blend supports one, two or four stages per channel. Scalar remapping, height shaping and
-spherical normal interpolation are reusable across source formats. Legacy wear-named blend parameters retain
+The field material blend supports one, two or four stages per channel. Sources can reuse the same scalar remapping, height shaping and
+spherical normal interpolation. Legacy wear-named blend parameters retain
 their serialized names for compatibility.
 
 ## Backends and performance
@@ -92,8 +108,23 @@ their serialized names for compatibility.
 `scalar` choices are available. `--blend-device` selects scalar-field material processing separately. CUDA OptiX
 `--denoise` uses albedo and normal guides; inspect fine detail after denoising.
 
-Quality presets are `preview` (960x540, 16 samples), `draft` (1280x720, 64) and `paper` (1920x1080, 256).
-Override with `--res` and `--spp`. The scene is reused across frames; unchanged poses and fields skip redundant
+| Preset | Resolution | Samples per pixel | Use |
+|---|---|---:|---|
+| `preview` | 960 x 540 | 16 | Check framing, motion and materials |
+| `draft` (default) | 1280 x 720 | 64 | Review a sequence |
+| `paper` | 1920 x 1080 | 256 | Render at full HD with more samples |
+
+```bash
+mitsuba-video render output/cube -q preview --out output/preview --no-encode
+mitsuba-video render output/cube -q draft --out output/draft --no-encode
+mitsuba-video render output/cube -q paper --out output/paper --no-encode
+```
+
+`--res` and `--spp` override the preset. For example, `-q paper --res 3840x2160 --spp 512` requests a custom 4K
+render. Presets render every selected frame; the separate `preview` command defaults to every eighth frame.
+`--denoise` keeps the selected sample count, so use `--spp` to lower it explicitly.
+
+The scene is reused across frames; unchanged poses and fields skip redundant
 updates. CPU field blending updates changed tiles where supported. `render_config.json` records the actual
 backend and per-step timings.
 
@@ -121,7 +152,7 @@ Each body supplies a material provider. A provider can return base/affected maps
 for multiple stages. Optional fixture writers register under `mitsuba_video.fixtures`.
 
 Plugins own file-format dependencies, simulator conventions, presets and specialized CLI options. The renderer
-loads installed plugins through package metadata without searching sibling checkouts. See the repository's
+finds installed plugins through package metadata. See the repository's
 `docs/plugins.md` for the interface and migration guide.
 
 ## Tests and examples

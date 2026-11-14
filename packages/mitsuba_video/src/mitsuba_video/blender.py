@@ -1,8 +1,8 @@
 """Blender backends: render the beauty frames with Cycles or EEVEE instead of Mitsuba.
 
 The scene is the one the Mitsuba path builds: the same bodies, recorded poses, camera path (``camera.camera_path``),
-key/rim/fill lights and ground, and the same per-frame wear-blended textures (``pipeline.BodyTextures``). This side
-writes them to a package Blender reads with nothing but bpy and numpy:
+key/rim/fill lights and ground, and the same per-frame wear-blended textures (``pipeline.BodyTextures``). The exporter
+writes a scene package that Blender reads using bpy and numpy:
 
     <out>/blender/scene.json              bodies, poses, camera, lights, render settings, frames to render
     <out>/blender/meshes/body_<i>.npz     vertices (mesh-local, before scale), normals, uvs (OBJ, v up), faces

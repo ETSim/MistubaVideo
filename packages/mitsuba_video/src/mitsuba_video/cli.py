@@ -1,4 +1,4 @@
-"""``mitsuba-video``: path-traced videos of rigid bodies whose UV atlases carry a per-texel scalar field.
+"""Render 3D frame sequences and videos with optional scalar fields.
 
     mitsuba-video render  SOURCE [-q paper] [--camera orbit] [--title ...]   full render + video
     mitsuba-video preview SOURCE                                             fast low-res check of framing/look

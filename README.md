@@ -5,11 +5,27 @@
 [![Mitsuba](https://img.shields.io/badge/Mitsuba-3.9.x-orange)](https://pypi.org/project/mitsuba/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Render a simulation frame by frame with Mitsuba 3, inspect the PNGs, then encode a video. Use manifests from your project, OpenUSD stages, or installed source plugins. Scalar fields and material transitions are optional.
+Render 3D frames with Mitsuba 3, inspect the PNGs, then encode them as a video. Use manifests from your project, OpenUSD stages, or installed source plugins. Scalar fields and material transitions are optional.
 
 ![Mitsuba-rendered animation of a rotating blue cube following a ballistic arc](docs/images/cube-throw.gif)
 
-This generated cube toss uses plain materials and prescribed ballistic motion. [View the frame strip](docs/images/cube-throw.png). Recreate both with `python examples/render_readme.py --animate` after installation.
+The cube toss uses plain materials and a prescribed ballistic path. [View the frame strip](docs/images/cube-throw.png). Recreate both with `python examples/render_readme.py --animate` after installation.
+
+## Rendering workflow
+
+```mermaid
+flowchart TD
+    input["Manifest, USD or source plugin"] --> scene["Geometry, materials and poses"]
+    fields["Optional scalar fields"] -.-> scene
+    scene --> camera["Camera and lighting"]
+    camera --> render["Mitsuba or Blender"]
+    quality["Preview / Draft / Paper"] --> render
+    render --> beauty["3D PNGs and optional EXR"]
+    beauty --> compose["Labels and optional field panels"]
+    compose --> frames["Annotated PNG frames"]
+    frames --> encode["FFmpeg"]
+    encode --> video["MP4 or GIF"]
+```
 
 ## Install
 
@@ -86,18 +102,45 @@ PBR uses albedo, roughness, tangent-space normal and metallic maps. Diffuse remo
 Manifest `base` and `affected` appearances accept `metallic` as a value or image path and `ao` as an image path. AO textures multiply albedo in linear colour space as an artistic approximation; path tracing already calculates light transport. MTL inputs accept `map_Pm` and `map_AO`, including `_worn` variants. An affected stage can expose a different material as a field changes.
 
 Field material interpolation supports two or four stages, scalar remapping, height shaping and spherical normal
-interpolation. These utilities do not assign physical meaning to the scalar values. [Material and source API
+interpolation. The source defines what each scalar value means. [Material and source API
 details](packages/mitsuba_video/README.md).
 
 `--face-normals` gives meshes a faceted appearance, matching the effect of Mitsuba's OBJ `face_normals=true`. By default, authored or computed vertex normals are interpolated. Normal maps can still add surface detail; `--normal-strength 0` flattens them for geometry comparisons.
 
-`--displacement-scale 0.002` offsets existing mesh vertices along their normals by `0.002 * (height - 0.5)` in world units. It uses the base height map once before animation, and defaults to zero. This is minimal static displacement: it does not subdivide the mesh or animate worn height. Use a dense mesh for silhouette detail. The notebook includes a generated height-map example.
+`--displacement-scale 0.002` offsets existing mesh vertices along their normals by `0.002 * (height - 0.5)` in world units. It uses the base height map once before animation, and defaults to zero. This static displacement uses the existing mesh, with no subdivision or per-frame height updates. Use a dense mesh for silhouette detail. The notebook includes a generated height-map example.
+
+## Quality presets
+
+Choose a preset with `-q` or `--quality`:
+
+| Preset | Resolution | Samples per pixel | Use |
+|---|---|---:|---|
+| `preview` | 960 x 540 | 16 | Check framing, motion and materials |
+| `draft` (default) | 1280 x 720 | 64 | Review a sequence before the final render |
+| `paper` | 1920 x 1080 | 256 | Render at full HD with more samples |
+
+```bash
+mitsuba-video render output/demo -q preview --out output/preview --no-encode
+mitsuba-video render output/demo -q draft --out output/draft --no-encode
+mitsuba-video render output/demo -q paper --out output/paper --no-encode
+```
+
+All three presets render every selected input frame. Add `--frames 12:13` to compare the same frame at each
+quality. The separate `mitsuba-video preview` command selects every eighth input frame by default.
+
+Override a preset's resolution or sample count with `--res` and `--spp`. For a custom 4K render:
+
+```bash
+mitsuba-video render output/demo -q paper --res 3840x2160 --spp 512 --out output/4k --no-encode
+```
+
+More pixels and samples increase rendering work. Check the noise and fine detail before rendering the whole
+sequence. On NVIDIA GPUs, `--variant cuda --denoise` enables guided OptiX denoising. Denoising keeps the chosen
+sample count; reduce it explicitly with `--spp` if needed.
 
 ## GPU and rendering speed
 
-Mitsuba 3.9.x and its matching Dr.Jit dependency are installed together. `--variant auto` tries CUDA on NVIDIA, Metal on Apple Silicon, LLVM on CPU, then scalar CPU. Explicit `--variant cuda`, `metal`, `cpu` and `scalar` choices are available. A backend must pass a small render before selection.
-
-Start with `-q preview` (960Ãƒâ€”540, 16 samples/pixel). `draft` uses 1280Ãƒâ€”720/64; `paper` uses 1920Ãƒâ€”1080/256. Override with `--res 640x360 --spp 16`. Lower samples and resolution reduce rendering work; compare noise before producing the final video. NVIDIA users can try `--denoise` for OptiX with albedo and normal guides. Check fine surface detail for smoothing.
+Mitsuba 3.9.x and its matching Dr.Jit dependency are installed together. `--variant auto` tries CUDA on NVIDIA, Metal on Apple Silicon, LLVM on CPU, then scalar CPU. Explicit `--variant cuda`, `metal`, `cpu` and `scalar` choices are available. The renderer tests each backend with a small render before selecting it.
 
 The scene is built once. Unchanged poses skip geometry uploads, unchanged fields skip texture blending, and CPU blends update only changed tiles where supported. `--blend-device auto` uses CUDA for supported terms; burnish and edge-wear terms use CPU. Read `timing_s_per_frame` in `render_config.json` to see where your scene spends time. GPU rendering and GPU field blending are separate choices. Performance depends on scene size, samples, textures and hardware.
 
@@ -126,6 +169,6 @@ Tests cover blend math, maps, manifests, USD animation, terminal setup, resume s
 
 For a CPU container, use `docker compose run --rm mitsuba-renderer --help`. NVIDIA rendering additionally needs NVIDIA Container Toolkit; build the image, then run `docker run --rm --gpus all mitsuba-video doctor --variant cuda`.
 
-The [publishing workflow](docs/publishing.md) builds and checks the distribution. Configure a PyPI trusted publisher before enabling uploads.
+The [publishing workflow](docs/publishing.md) is available for a future release. Its default run builds and checks the distribution without uploading it.
 
 [MIT license](LICENSE)

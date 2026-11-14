@@ -1,4 +1,4 @@
-"""Tone mapping, the side panel (UV wear atlas + colour bar), and ffmpeg encoding."""
+"""Tone mapping, optional UV field panels and colour bars, and FFmpeg encoding."""
 
 from __future__ import annotations
 

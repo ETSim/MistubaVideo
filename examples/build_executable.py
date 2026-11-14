@@ -26,8 +26,8 @@ def main():
                "--name", "mitsuba-video", "--distpath", str(output), "--workpath", str(work / "build"),
                "--specpath", str(work), "--runtime-hook", str(root / "build_support/runtime.py")]
     command.extend(["--collect-all", "mitsuba_video"])
-    # These libraries generate types dynamically. Importing every submodule during collection can initialize
-    # every rendering variant; preserve their runtime trees and identify the native entry modules explicitly.
+    # Mitsuba and Dr.Jit generate types dynamically. Collect their runtime files and native entry modules
+    # explicitly so packaging does not initialize every rendering variant.
     for name in ("mitsuba", "drjit"):
         distribution = metadata.distribution(name)
         folder = Path(distribution.locate_file(name))

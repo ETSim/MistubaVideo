@@ -1,4 +1,4 @@
-"""Locate bundled native libraries and an optional bundled FFmpeg before importing Mitsuba."""
+"""Set library search paths for Mitsuba and an optional bundled FFmpeg."""
 
 import os
 import sys

@@ -1,4 +1,4 @@
-"""Composite-time annotations: labels on the bodies in the image, wear-panel titles, the field's physical full scale and
+"""Frame annotations: body labels, field-panel titles, physical field scale and
 the header wording.
 
 They are read from a JSON file (``--annotate``) when a frame is composited, so they never change the path-traced
@@ -27,7 +27,7 @@ from .model import Body
 @dataclass
 class Annotations:
     body_labels: dict[int, str] = field(default_factory=dict)  # tag drawn on the body in the image
-    panel_titles: dict[int, str] = field(default_factory=dict)  # wear-panel title (default: the body label)
+    panel_titles: dict[int, str] = field(default_factory=dict)  # Field-panel title (default: the body label).
     field_label: str = ""  # colour bar caption, e.g. "wear depth"
     field_max: str = ""  # colour bar top, e.g. "5 mm"
     # The header's travel line names the moving body with this label; "" leaves the line out (a bare "body 4" means
@@ -75,7 +75,7 @@ class Annotations:
         )
 
     def panel_title(self, index: int, field_caption: str) -> str | None:
-        """The wear panel's title for body ``index``, or None to keep the renderer's default."""
+        """Return the field-panel title for body ``index``, or None to use the default."""
         if index in self.panel_titles:
             return self.panel_titles[index]
         if index in self.body_labels:  # the colour bar names the field; two-column panels leave ~25 characters

@@ -1,8 +1,8 @@
 """Render pipeline: source -> per-frame Mitsuba renders -> composited frames -> video.
 
-``run_render(settings)`` is the whole job; CLIs only turn options into a ``RenderSettings``. With ``backend`` cycles
-or eevee, Blender renders the beauty frames from the same scene (``mitsuba_video.blender``, which adds
-``<out>/blender/``: the scene package and ``scene.blend``) and the loop below only composites them. Output layout:
+``run_render(settings)`` renders and encodes a sequence. The CLI builds its ``RenderSettings`` from command-line
+options. With ``backend`` cycles or eevee, ``mitsuba_video.blender`` renders the beauty frames and saves the scene
+package and ``scene.blend`` under ``<out>/blender/``. The pipeline then composites those frames. Output layout:
 
     <out>/beauty/frame_NNNNNN.png   tone-mapped 3D render
     <out>/frames/frame_NNNNNN.png   beauty + header + UV field panel + covered-area chart (what gets encoded)
@@ -56,7 +56,8 @@ QUALITY_PRESETS: dict[str, tuple[int, int, int]] = {
     "draft": (1280, 720, 64),
     "paper": (1920, 1080, 256),
 }
-# spp with --denoise (guided OptiX on a box-filtered film), from `tf render quality` against a 1024 spp reference
+# Suggested sample budgets for guided OptiX on a box-filtered film. CLI presets still use QUALITY_PRESETS.
+# These values come from `tf render quality` against a 1024 spp reference
 # (2026-11-03, 1280x720, 3 frames each of four_grounds_dragged overhead and scratch_left_right close-up). Worn-region
 # PSNR, denoised, 16/32/64/128 spp: overhead 35.6/36.5/37.4/38.2 dB, close-up 31.0/31.9/32.4/33.0 dB; 64 spp is the
 # lowest within 1 dB of 128 on both. Paper (1080p, not measured) keeps 128 for headroom; preview stays a quick look.
@@ -97,7 +98,7 @@ class RenderSettings:
     lighting: scene.LightingSettings = field(default_factory=scene.LightingSettings)
     exposure: float = 0.0
     max_texture: int = 2048
-    blend_device: str = "auto"  # wear blend: auto | cpu (numpy) | gpu (Dr.Jit CUDA); see blend.resolve_device
+    blend_device: str = "auto"  # Field blend: auto | cpu (numpy) | gpu (Dr.Jit CUDA); see blend.resolve_device
     # With resume: rebuild every composited frame (panels, chart, header) from the saved beauty frames instead of
     # path tracing again; a frame without a saved beauty is rendered. Composite-only settings may differ.
     recompose: bool = False
