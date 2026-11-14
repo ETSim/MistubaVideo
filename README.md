@@ -22,11 +22,15 @@ python -m venv .venv
 # Windows PowerShell: .venv\Scripts\Activate.ps1
 # Linux/macOS: source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e "packages/mitsuba_video[usd,notebook]"
+python -m pip install ".[usd,notebook]"
 mitsuba-video doctor
 ```
 
-With uv, use `uv venv` and `uv pip install -e "packages/mitsuba_video[usd,notebook]"`, then activate the environment. The core has no simulator or HDF5 dependency. Source adapters are installed as plugins.
+With uv, use `uv venv` and `uv pip install ".[usd,notebook]"`, then activate the environment. The core has no simulator or HDF5 dependency. Source adapters are installed as plugins.
+
+For the portable Windows application, see [pip and EXE installation](docs/install.md). Extract its ZIP and run
+`mitsuba-video.exe`; keep the adjacent `_internal` folder. Build it locally with `python examples/build_executable.py`
+after installing `.[freeze]`, or download the Windows workflow artifact. Python is bundled in that application.
 
 ## Render your first frames
 

@@ -1,0 +1,5 @@
+include README.md LICENSE
+include packages/mitsuba_video/pyproject.toml
+recursive-include build_support *.py
+include examples/build_executable.py
+include docs/install.md

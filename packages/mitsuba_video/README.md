@@ -7,9 +7,9 @@ other quantities can drive a heatmap or a material transition.
 ## Install
 
 ```bash
-python -m pip install -e packages/mitsuba_video
+python -m pip install .
 # Optional USD and Jupyter support:
-python -m pip install -e "packages/mitsuba_video[usd,notebook]"
+python -m pip install ".[usd,notebook]"
 mitsuba-video doctor
 ```
 

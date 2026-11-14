@@ -1,0 +1,54 @@
+name: Windows executable
+
+on:
+  workflow_dispatch:
+    inputs:
+      usd:
+        description: Include the optional USD reader
+        type: boolean
+        default: false
+  push:
+    paths: ["build_support/**", "examples/build_executable.py", "packages/mitsuba_video/**", "pyproject.toml", ".github/workflows/windows-executable.yml"]
+  pull_request:
+    paths: ["build_support/**", "examples/build_executable.py", "packages/mitsuba_video/**", "pyproject.toml", ".github/workflows/windows-executable.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install ".[freeze]"
+          if ('${{ inputs.usd }}' -eq 'true') { python -m pip install ".[usd]" }
+      - name: Build portable executable
+        shell: pwsh
+        run: |
+          if ('${{ inputs.usd }}' -eq 'true') {
+            python examples/build_executable.py --usd
+          } else {
+            python examples/build_executable.py
+          }
+      - name: Test executable
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD "dist/windows/mitsuba-video/mitsuba-video.exe"
+          & $exe version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $exe fixture "$env:RUNNER_TEMP/cube" --frames 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $exe render "$env:RUNNER_TEMP/cube" --out "$env:RUNNER_TEMP/render" --res 64x36 --spp 2 --variant scalar --no-encode
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-ChildItem "$env:RUNNER_TEMP/render/frames/frame_*.png").Count -ne 2) { throw "Missing rendered frames" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mitsuba-video-windows
+          path: dist/windows/*.zip
