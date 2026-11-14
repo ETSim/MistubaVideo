@@ -57,7 +57,8 @@ class InlineMaterial:
 
     def __init__(self, spec: dict, base_dir: Path, label: str) -> None:
         self.spec, self.base_dir, self.label = spec, base_dir, label
-        self.metallic = float(spec.get("base", {}).get("metallic", 0.0))
+        metal = spec.get("base", {}).get("metallic", 0.0)
+        self.metallic = float(metal) if not isinstance(metal, str) else 0.0
 
     def _images(self, appearance: dict) -> tuple[MapImages, np.ndarray, float]:
         imgs = MapImages()
@@ -75,6 +76,9 @@ class InlineMaterial:
             imgs.normal = load_image(self.base_dir / appearance["normal"], "RGB")
         if "height" in appearance:
             imgs.height = load_image(self.base_dir / appearance["height"], "L")
+        for name in ("metallic", "ao"):
+            if isinstance(appearance.get(name), str):
+                setattr(imgs, name, load_image(self.base_dir / appearance[name], "L"))
         return imgs, colour, float(rough)
 
     def preferred_size(self) -> tuple[int, int] | None:
@@ -86,13 +90,16 @@ class InlineMaterial:
         self, size: tuple[int, int], normals: NormalOptions, log: Callable[[str], None] | None
     ) -> tuple[MapSet, MapSet]:
         base_spec = self.spec.get("base", {})
-        worn_spec = {**base_spec, **self.spec.get("worn", {})}  # unspecified worn entries keep the base
+        worn_spec = {**base_spec, **self.spec.get("worn", {}), **self.spec.get("affected", {})}
         b_imgs, b_col, b_rough = self._images(base_spec)
         w_imgs, w_col, w_rough = self._images(worn_spec)
-        return (
-            build_mapset(b_imgs, b_col, b_rough, size, normals, f"{self.label} base", log),
-            build_mapset(w_imgs, w_col, w_rough, size, normals, f"{self.label} worn", log),
-        )
+        base = build_mapset(b_imgs, b_col, b_rough, size, normals, f"{self.label} base", log)
+        worn = build_mapset(w_imgs, w_col, w_rough, size, normals, f"{self.label} worn", log)
+        for maps, appearance in ((base, base_spec), (worn, worn_spec)):
+            metal = appearance.get("metallic", 0.0)
+            if not isinstance(metal, str):
+                maps.metallic = np.full((size[1], size[0]), float(metal), np.float32)
+        return base, worn
 
 
 class ManifestSource:
@@ -116,10 +123,12 @@ class ManifestSource:
                 area_csv=f"{name}_area.csv",
                 area_title=spec.get("area_title", f"covered area ({name})"),
             )
-            for name, spec in data["fields"].items()
+            for name, spec in data.get("fields", {}).items()
         }
-        self._ranges = {name: tuple(spec.get("range", [0.0, 1.0])) for name, spec in data["fields"].items()}
-        self.primary_field = data.get("primary_field", next(iter(self.fields)))
+        self._ranges = {name: tuple(spec.get("range", [0.0, 1.0])) for name, spec in data.get("fields", {}).items()}
+        self.primary_field = data.get("primary_field", next(iter(self.fields), ""))
+        if self.primary_field and self.primary_field not in self.fields:
+            raise ValueError(f"primary_field {self.primary_field!r} is not declared in fields")
         self.capabilities = frozenset()
         blend = data.get("blend")
         self.blend = BlendParams(**blend) if blend else None
@@ -209,6 +218,8 @@ class ManifestSource:
         return self._positions[frame.position], self._orientations[frame.position]
 
     def field(self, frame: Frame, body_index: int, name: str | None = None) -> np.ndarray | None:
+        if not self.fields:
+            return None
         name = name or self.primary_field
         rel = self._inline_fields[frame.position].get(name, {}).get(str(body_index))
         if rel is None:

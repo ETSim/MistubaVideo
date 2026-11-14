@@ -1,12 +1,12 @@
-# mitsuba-video (packages/mitsuba_video): tests, smoke renders for the manifest and TextureFriction sources, and an
+# mitsuba-video (packages/mitsuba_video): tests and smoke renders for the built-in sources, and an
 # install check from this exact commit (how downstream projects pin it). Runs locally under act:  act -j linux
 name: mitsuba-video
 
 on:
   push:
-    paths: ["packages/mitsuba_video/**", ".github/workflows/mitsuba-video.yml"]
+    paths: ["packages/mitsuba_video/**", ".github/workflows/mitsuba-video.yml", "notebooks/**", "examples/**", "pyproject.toml", "Dockerfile"]
   pull_request:
-    paths: ["packages/mitsuba_video/**", ".github/workflows/mitsuba-video.yml"]
+    paths: ["packages/mitsuba_video/**", ".github/workflows/mitsuba-video.yml", "notebooks/**", "examples/**", "pyproject.toml", "Dockerfile"]
   workflow_dispatch:
 
 jobs:
@@ -34,9 +34,18 @@ jobs:
       - name: Install
         run: pip install "./packages/mitsuba_video[test]"
 
+      - name: Lint
+        run: python -m ruff check packages/mitsuba_video examples
+
       - name: Tests
         working-directory: packages/mitsuba_video
         run: python -m pytest -q
+
+      - name: Build wheel and source distribution
+        run: python -m build packages/mitsuba_video
+
+      - name: Execute tutorial notebook
+        run: python examples/verify_notebook.py
 
       - name: Smoke renders
         run: |
@@ -45,22 +54,19 @@ jobs:
           mitsuba-video fixture /tmp/man --kind manifest
           mitsuba-video validate /tmp/man
           mitsuba-video render /tmp/man --out smoke/manifest -q preview --res 320x180 --spp 8 --variant llvm \
-            --title "smoke" --title-seconds 1 --hold 0.5 --fps 30
-          mitsuba-video fixture /tmp/tf/FrictionTexture_synthetic.h5 --kind texturefriction
-          tf-render inspect /tmp/tf
-          tf-render render /tmp/tf --out smoke/tf -q preview --res 320x180 --spp 8 --variant llvm --no-encode
+            --look heatmap --title "smoke" --title-seconds 1 --hold 0.5 --fps 30
+          mitsuba-video render examples/rigid.usda --out smoke/usd --res 96x54 --spp 4 --variant llvm --frames 0:2 --look plain --no-encode
           ffprobe -v error -select_streams v:0 -count_frames \
-            -show_entries stream=codec_name,width,height,nb_read_frames -of csv=p=0 smoke/manifest/wear_heatmap_fixed.mp4
+            -show_entries stream=codec_name,width,height,nb_read_frames -of csv=p=0 smoke/manifest/temperature_heatmap_fixed.mp4
           test "$(ls smoke/manifest/frames | wc -l)" -eq 6
-          test "$(ls smoke/tf/frames | wc -l)" -eq 6
 
       - name: Install from this commit (downstream pin)
         if: ${{ !env.ACT }}
         run: |
           python -m venv /tmp/pin
           /tmp/pin/bin/pip install --quiet \
-            "mitsuba-video[texturefriction] @ git+https://github.com/${{ github.repository }}@${{ github.sha }}#subdirectory=packages/mitsuba_video"
-          /tmp/pin/bin/tf-render version
+            "mitsuba-video @ git+https://github.com/${{ github.repository }}@${{ github.sha }}#subdirectory=packages/mitsuba_video"
+          /tmp/pin/bin/mitsuba-video version
 
       # Best effort: the org-wide artifact quota can be full, and the job has already passed by this point.
       - name: Upload smoke renders

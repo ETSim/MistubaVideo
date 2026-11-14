@@ -20,7 +20,7 @@ from mitsuba_video.source import available_sources, detect_kind, parse_options
 
 
 def test_registry_has_builtins_and_parses_options(manifest_dir):
-    assert {"texturefriction", "manifest"} <= set(available_sources())
+    assert {"usd", "manifest"} <= set(available_sources())
     assert detect_kind(manifest_dir) == "manifest"
     assert parse_options(["scale=1=0.5", "assets=a"]) == {"scale": "1=0.5", "assets": "a"}
     with pytest.raises(ValueError):
@@ -34,6 +34,31 @@ def test_parse_frames():
     assert list(pipeline.parse_frames("-2:", 6)) == [4, 5]
 
 
+@pytest.mark.parametrize("shading", ["pbr", "diffuse", "metallic", "ao"])
+def test_shading_smoke(manifest_dir, tmp_path, shading):
+    from PIL import Image
+    import numpy as np
+
+    out = tmp_path / shading
+    result = _run(["render", str(manifest_dir), "--out", str(out), "--res", "64x36", "--spp", "4",
+                   "--variant", "scalar", "--no-encode", "--no-panel", "--no-chart", "--frames", "-1:",
+                   "--shading", shading, "--look", "worn"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    pixels = np.asarray(Image.open(out / "beauty/frame_000000.png"))
+    assert pixels.max() > 0 and np.isfinite(pixels).all()
+    config = json.loads((out / pipeline.CONFIG_NAME).read_text())
+    assert config["signature"]["shading"] == shading
+
+
+def test_face_normals_render(manifest_dir, tmp_path):
+    out = tmp_path / "faceted"
+    result = _run(["render", str(manifest_dir), "--out", str(out), "--res", "64x36", "--spp", "2",
+                   "--variant", "scalar", "--no-encode", "--frames", "0:1", "--face-normals"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    config = json.loads((out / pipeline.CONFIG_NAME).read_text())
+    assert config["signature"]["face_normals"] is True
+
+
 def test_resume_refuses_different_settings(tmp_path):
     (tmp_path / pipeline.CONFIG_NAME).write_text(json.dumps({"signature": {"spp": 64, "look": "heatmap"}}))
     pipeline._check_resume(tmp_path, {"spp": 64, "look": "heatmap"})
@@ -43,7 +68,7 @@ def test_resume_refuses_different_settings(tmp_path):
 
 def test_cli_fixture_validate_inspect_sources(tmp_path):
     runner = CliRunner()
-    result = runner.invoke(app, ["fixture", str(tmp_path / "m"), "--frames", "4"])
+    result = runner.invoke(app, ["fixture", str(tmp_path / "m"), "--kind", "manifest", "--frames", "4"])
     assert result.exit_code == 0, result.output
     result = runner.invoke(app, ["validate", str(tmp_path / "m")])
     assert result.exit_code == 0 and "4 frames" in result.output, result.output
@@ -51,13 +76,9 @@ def test_cli_fixture_validate_inspect_sources(tmp_path):
     assert result.exit_code == 0, result.output
     assert "synthetic_box" in result.output and "4  (t = 0.000" in result.output
     result = runner.invoke(app, ["sources"])
-    assert "manifest" in result.output and "texturefriction" in result.output
+    assert "manifest" in result.output and "usd" in result.output
 
 
-def test_cli_inspect_texturefriction(tf_recording):
-    result = CliRunner().invoke(app, ["inspect", str(tf_recording)])
-    assert result.exit_code == 0, result.output
-    assert "slid" in result.output and "atlas" in result.output
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
@@ -84,7 +105,7 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
 def test_render_smoke_manifest_and_resume(manifest_dir, tmp_path):
     out = tmp_path / "render"
     args = [str(manifest_dir), "--out", str(out), "--res", "96x54", "--spp", "4", "--variant", "llvm",
-            "--no-encode", "--frames", "0:6:5", "--ramp", "0.2"]  # fmt: skip
+            "--no-encode", "--frames", "0:6:5", "--ramp", "0.2", "--look", "heatmap"]  # fmt: skip
     result = _run(args)
     assert result.returncode == 0, result.stdout + result.stderr
     assert len(sorted((out / "frames").glob("frame_*.png"))) == 2
@@ -95,59 +116,3 @@ def test_render_smoke_manifest_and_resume(manifest_dir, tmp_path):
     result = _run(args + ["--resume"])
     assert result.returncode == 0, result.stdout + result.stderr
     assert "reusing 2" in result.stdout + result.stderr
-
-
-@pytest.mark.skipif(importlib.util.find_spec("mitsuba") is None, reason="mitsuba not installed")
-def test_render_smoke_tf_alias(tf_recording, tmp_path):
-    out = tmp_path / "render_tf"
-    env = {**os.environ, "PYTHONPATH": str(SRC)}
-    code = ("import sys; from mitsuba_video.sources.texturefriction.cli import main; "
-            "main(sys.argv[1:])")  # fmt: skip
-    result = subprocess.run([sys.executable, "-c", code, str(tf_recording), "--out", str(out), "--res", "96x54",
-                             "--spp", "4", "--variant", "llvm", "--no-encode", "--frames", "-1:"],
-                            capture_output=True, text=True, timeout=600, env=env)  # fmt: skip
-    assert result.returncode == 0, result.stdout + result.stderr
-    config = json.loads((out / pipeline.CONFIG_NAME).read_text())
-    assert config["video_stem"] == "wear_heatmap_fixed" and config["signature"]["source_kind"] == "texturefriction"
-    assert (out / "worn_area.csv").is_file()
-
-
-@pytest.mark.skipif(importlib.util.find_spec("mitsuba") is None, reason="mitsuba not installed")
-def test_render_hide_body_films_from_below(tf_recording, tmp_path):
-    # The worn face of a sliding body faces its partner; --hide drops the partner so a camera below can see it.
-    out = tmp_path / "render_below"
-    args = [str(tf_recording), "--source", "texturefriction", "--out", str(out), "--res", "96x54", "--spp", "4",
-            "--variant", "llvm", "--no-encode", "--frames", "-1:", "--hide", "0", "--no-ground", "--key-light", "0",
-            "--camera", "track", "--elevation", "-30", "--look", "worn"]  # fmt: skip
-    result = _run(args)
-    assert result.returncode == 0, result.stdout + result.stderr
-    config = json.loads((out / pipeline.CONFIG_NAME).read_text())
-    assert config["signature"]["hidden_bodies"] == [0]
-    assert len(list((out / "frames").glob("frame_*.png"))) == 1
-    result = _run(args + ["--hide", "1"])  # both bodies hidden: nothing left to render
-    assert result.returncode != 0 and "no body to render" in result.stdout + result.stderr
-
-
-def test_tf_render_without_h5py_prints_install_hint(monkeypatch, capsys):
-    from mitsuba_video import cli
-
-    real_find_spec = importlib.util.find_spec
-
-    def find_spec(name, *args):
-        return None if name == "h5py" else real_find_spec(name, *args)
-
-    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
-    with pytest.raises(SystemExit) as exc:
-        cli.tf_main(["--help"])
-    assert exc.value.code == 2
-    assert "mitsuba-video[texturefriction]" in capsys.readouterr().err
-
-
-def test_tf_render_fixture_defaults_to_a_recording(tmp_path):
-    from mitsuba_video.cli import build_app
-
-    tf_app = build_app(default_source="texturefriction", prog="tf-render")
-    h5 = tmp_path / "rec" / "FrictionTexture_synthetic.h5"
-    result = CliRunner().invoke(tf_app, ["fixture", str(h5), "--frames", "2"])
-    assert result.exit_code == 0, result.output
-    assert h5.is_file()

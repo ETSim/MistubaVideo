@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from .color import colormap, linear_to_srgb
+from .color import colormap
 
 BACKGROUND = (18, 18, 22)
 TEXT = (232, 232, 236)
@@ -18,11 +18,29 @@ MUTED = (150, 150, 160)
 
 
 def tonemap(rgb: np.ndarray, exposure: float = 0.0) -> np.ndarray:
-    """Linear HDR -> 8-bit sRGB through the ACES filmic fit (Narkowicz 2015)."""
-    x = np.maximum(rgb, 0.0) * (2.0**exposure)
+    """Linear HDR -> 8-bit sRGB through the ACES filmic fit (Narkowicz 2015), then the sRGB encode of
+    :func:`color.linear_to_srgb`. Written in place with few NumPy calls: it runs on the frame-writer thread, where each
+    call waits for the GIL the render thread holds (250 ms per 720p frame before, 2026-11-06). Byte-identical to the
+    expression form ``(linear_to_srgb(clip(x (a x + b) / (x (c x + d) + e))) * 255 + 0.5).astype(uint8)``."""
+    x = np.maximum(rgb, 0.0)
+    x *= 2.0**exposure
     a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14
-    mapped = np.clip((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0)
-    return (linear_to_srgb(mapped) * 255.0 + 0.5).astype(np.uint8)
+    num = x * a
+    num += b
+    num *= x  # x (a x + b): a float multiply commutes exactly
+    den = x * c
+    den += d
+    den *= x
+    den += e
+    num /= den
+    np.clip(num, 0.0, 1.0, out=num)  # linear_to_srgb clips again; on [0, 1] that is a no-op
+    out = np.power(num, 1.0 / 2.4)
+    out *= 1.055
+    out -= 0.055
+    np.multiply(num, 12.92, out=out, where=num <= 0.0031308)
+    out *= 255.0
+    out += 0.5
+    return out.astype(np.uint8)
 
 
 def write_exr(path: Path, rgb: np.ndarray) -> None:
@@ -31,12 +49,19 @@ def write_exr(path: Path, rgb: np.ndarray) -> None:
     mi.Bitmap(np.ascontiguousarray(rgb, dtype=np.float32)).write(str(path))
 
 
-def font(size: int) -> ImageFont.ImageFont:
-    for name in ("DejaVuSans.ttf", "arial.ttf", "Arial.ttf", "segoeui.ttf"):
-        try:
-            return ImageFont.truetype(name, size)
-        except OSError:
-            continue
+def font(size: int, bold: bool = False) -> ImageFont.ImageFont:
+    """Helvetica (per-user fonts are searched too: PIL only looks in the system folder), then Segoe UI, Arial."""
+    import os
+
+    names = (("Helvetica-Bold.ttf", "segoeuib.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf") if bold
+             else ("Helvetica.ttf", "segoeui.ttf", "arial.ttf", "Arial.ttf", "DejaVuSans.ttf"))  # fmt: skip
+    folders = [Path(os.environ["LOCALAPPDATA"]) / "Microsoft" / "Windows" / "Fonts"] if os.environ.get("LOCALAPPDATA") else []
+    for name in names:
+        for candidate in (*(str(f / name) for f in folders), name):
+            try:
+                return ImageFont.truetype(candidate, size)
+            except OSError:
+                continue
     return ImageFont.load_default(size=size)
 
 
@@ -226,10 +251,15 @@ def compose_frame(
     display_max: float = 1.0,
     field_label: str = "field, normalized",
     field_threshold: float = 0.5 / 255.0,
+    field_max_text: str = "",
+    callouts: list | None = None,
+    arrows: list | None = None,
+    cluster_boxes: list | None = None,
 ) -> Image.Image:
     """Beauty render with a header, plus a right-hand column of UV wear-atlas panels when ``panels`` is set.
 
-    ``chart`` = (series, frame index) adds the worn-area line chart under the atlas panels.
+    ``chart`` = (series, frame index) adds the worn-area line chart under the atlas panels. ``field_max_text`` labels
+    the top of the colour bar in physical units ("5 mm"); ``callouts`` (``annotate.Callout``) tag bodies in the image.
     """
     h, w = beauty.shape[:2]
     big, small = font(max(14, h // 34)), font(max(11, h // 52))
@@ -238,14 +268,29 @@ def compose_frame(
     if panel_w - 2 * pad < MIN_PANEL_WIDTH:  # thumbnail-size renders: no room for a legible side column
         panels, panel_w = [], 0
     canvas = Image.new("RGB", (w + panel_w, h), BACKGROUND)
-    canvas.paste(Image.fromarray(beauty), (0, 0))
+    picture = Image.fromarray(beauty)
+    if cluster_boxes:  # projected cluster AABB edges (annotate.cluster_box_segments), under the arrows and tags
+        from .annotate import draw_cluster_boxes
+
+        draw_cluster_boxes(picture, cluster_boxes)
+    if arrows:  # under the tags
+        from .annotate import draw_arrows
+
+        draw_arrows(picture, arrows)
+    if callouts:
+        from .annotate import draw_callouts
+
+        top = pad + big.size + small.size + 8 if header else pad
+        draw_callouts(picture, callouts, font(max(14, h // 34), True), reserved_top=top)
+    canvas.paste(picture, (0, 0))
     draw = ImageDraw.Draw(canvas)
 
-    # Header with a soft shadow so it reads over bright and dark renders.
-    for dx, dy, color in ((1, 1, (0, 0, 0)), (0, 0, TEXT)):
-        draw.text((pad + dx, pad + dy), header, font=big, fill=color)
-    draw.text((pad, pad + big.size + 4), subheader, font=small, fill=(0, 0, 0))
-    draw.text((pad - 1, pad + big.size + 3), subheader, font=small, fill=(210, 210, 216))
+    if header:  # empty when tf video draws the title and clock itself
+        # Header with a soft shadow so it reads over bright and dark renders.
+        for dx, dy, color in ((1, 1, (0, 0, 0)), (0, 0, TEXT)):
+            draw.text((pad + dx, pad + dy), header, font=big, fill=color)
+        draw.text((pad, pad + big.size + 4), subheader, font=small, fill=(0, 0, 0))
+        draw.text((pad - 1, pad + big.size + 3), subheader, font=small, fill=(210, 210, 216))
 
     if not panels:
         return canvas
@@ -255,14 +300,19 @@ def compose_frame(
     bar_h = max(8, h // 70)
     footer = 2 * small.size + bar_h + 3 * pad
     chart_h = int(h * 0.3) if chart else 0
-    slot = (h - footer - chart_h - pad) // len(panels)
-    side = max(16, min(inner, slot - small.size - 2 * pad))
-    y = pad
-    for source, wear in panels:
-        draw.text((x, y), _fit(draw, source.title, small, inner), font=small, fill=TEXT)
+    # One column up to three bodies, two past that (four lanes show 2 x 2, six tiles 3 x 2).
+    cols = 1 if len(panels) <= 3 else 2
+    rows = -(-len(panels) // cols)
+    cell_w = (inner - (cols - 1) * pad) // cols
+    slot = (h - footer - chart_h - pad) // rows
+    side = max(16, min(cell_w, slot - small.size - 2 * pad))
+    for k, (source, wear) in enumerate(panels):
+        cx = x + (k % cols) * (cell_w + pad)
+        y = pad + (k // cols) * slot
+        draw.text((cx, y), _fit(draw, source.title, small, cell_w), font=small, fill=TEXT)
         y += small.size + pad // 2
-        canvas.paste(wear_panel_image(wear, source.roi, side, display_max, field_threshold), (x + (inner - side) // 2, y))
-        y += side + pad
+        canvas.paste(wear_panel_image(wear, source.roi, side, display_max, field_threshold),
+                     (cx + (cell_w - side) // 2, y))  # fmt: skip
     if chart:
         series, index = chart
         canvas.paste(area_chart(series, index, inner, chart_h - pad), (x, h - footer - chart_h))
@@ -276,7 +326,7 @@ def compose_frame(
     canvas.paste(colorbar(inner, bar_h), (x, yb))
     yb += bar_h + 2
     draw.text((x, yb), "0", font=small, fill=MUTED)
-    top = f"{display_max:g}"
+    top = field_max_text or f"{display_max:g}"
     draw.text((x + inner - draw.textlength(top, font=small), yb), top, font=small, fill=MUTED)
     return canvas
 

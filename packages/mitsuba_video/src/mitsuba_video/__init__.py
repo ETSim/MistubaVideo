@@ -1,4 +1,6 @@
-"""mitsuba-video: path-traced Mitsuba 3 videos of rigid bodies whose UV atlases carry a per-texel scalar field
-(wear, damage, temperature, coverage...). Inputs are pluggable ``Source`` implementations (see ``source.py``)."""
+"""General-purpose Mitsuba 3 frame and video rendering.
 
-__version__ = "0.3.0"
+Sources provide scene geometry and poses, with optional scalar fields and material transitions.
+"""
+
+__version__ = "0.4.0"

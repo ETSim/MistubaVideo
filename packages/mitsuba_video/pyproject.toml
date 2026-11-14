@@ -1,34 +1,41 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mitsuba-video"
-version = "0.3.0"
-description = "Path-traced Mitsuba 3 videos of rigid bodies whose UV atlases carry a per-texel field (wear, damage, temperature...)"
+version = "0.4.0"
+description = "General-purpose Mitsuba frame and video rendering with optional scalar fields and source plugins"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
-    "mitsuba>=3.5,<3.10",
+    "mitsuba>=3.9,<3.10",
     "numpy>=1.24",
     "Pillow>=10.1",
     "typer>=0.9",
     "tqdm>=4.60",
     "jsonschema>=4",
+    "rich>=13",
 ]
 
 [project.optional-dependencies]
-texturefriction = ["h5py>=3"]
-test = ["pytest>=7", "h5py>=3"]
+usd = ["usd-core>=25"]
+notebook = ["jupyterlab>=4", "ipykernel>=6"]
+test = ["pytest>=8", "usd-core>=25", "ruff>=0.9", "build>=1", "nbformat>=5", "nbclient>=0.10", "ipykernel>=6"]
 
 [project.scripts]
 mitsuba-video = "mitsuba_video.cli:main"
-tf-render = "mitsuba_video.cli:tf_main"
+
+[project.urls]
+Homepage = "https://github.com/ETSim/MistubaVideo"
+Documentation = "https://github.com/ETSim/MistubaVideo/blob/main/README.md"
+Issues = "https://github.com/ETSim/MistubaVideo/issues"
 
 [project.entry-points."mitsuba_video.sources"]
-texturefriction = "mitsuba_video.sources.texturefriction:TextureFrictionSource"
 manifest = "mitsuba_video.sources.manifest:ManifestSource"
+usd = "mitsuba_video.sources.usd:UsdSource"
 
 [tool.setuptools.packages.find]
 where = ["src"]

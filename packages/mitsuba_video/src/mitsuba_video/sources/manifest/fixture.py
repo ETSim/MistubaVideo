@@ -41,10 +41,12 @@ def _cube(half: float = 0.1) -> tuple[np.ndarray, ...]:
     return np.array(verts, np.float32), np.array(norms, np.float32), np.array(uvs, np.float32), np.array(faces, np.uint32)
 
 
-def write_synthetic_manifest(root: Path, frames: int = 6, box_scale: float = 1.5) -> Path:
+def write_synthetic_manifest(root: Path, frames: int = 6, box_scale: float = 1.5,
+                             field_name: str = "temperature") -> Path:
     """Box sliding along +x at z = +0.2 across a 2 x 1 plane, wearing a stripe into the plane and a disc into itself."""
     w = ManifestWriter(Path(root), name="synthetic: box sliding on plane", travel_label="slid")
-    w.add_field("wear", label="wear, normalized", threshold=0.5 / 255.0, area_title="worn area")
+    w.add_field(field_name, label=f"{field_name}, normalized", threshold=0.5 / 255.0,
+                area_title=f"covered area ({field_name})")
     pv, pn, puv, pf = _plane()
     w.add_body(0, "synthetic_plane", pv, pn, puv, pf, fixed=True,
                material={"base": {"albedo": [0.35, 0.34, 0.33], "roughness": 0.7},
@@ -67,5 +69,13 @@ def write_synthetic_manifest(root: Path, frames: int = 6, box_scale: float = 1.5
         box_wear = np.maximum(box_wear, np.clip(0.9 * s - r, 0.0, 1.0))
         q = [math.cos(angle / 2), 0.0, math.sin(angle / 2), 0.0]
         w.add_frame(k * 0.01, [[0, 0, 0], [x, half, z]], [[1, 0, 0, 0], q],
-                    fields={"wear": {0: plane_wear, 1: box_wear}})  # fmt: skip
+                    fields={field_name: {0: plane_wear, 1: box_wear}})  # fmt: skip
     return w.close()
+
+
+def write_temperature_manifest(root: Path, frames: int = 6) -> Path:
+    return write_synthetic_manifest(root, frames=frames, field_name="temperature")
+
+
+def write_damage_manifest(root: Path, frames: int = 6) -> Path:
+    return write_synthetic_manifest(root, frames=frames, field_name="damage")

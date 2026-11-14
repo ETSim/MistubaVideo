@@ -1,0 +1,49 @@
+name: Publish mitsuba-video
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to PyPI after building and checking the distribution
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build twine
+      - run: python -m build packages/mitsuba_video
+      - run: python -m twine check packages/mitsuba_video/dist/*
+      - name: Check standalone wheel
+        run: |
+          python -m pip install packages/mitsuba_video/dist/*.whl
+          mitsuba-video version
+          mitsuba-video fixture /tmp/cube --frames 2
+          mitsuba-video render /tmp/cube --out /tmp/render --res 64x36 --spp 2 --variant scalar --no-encode
+          python -c "from mitsuba_video.source import available_sources; assert set(available_sources()) == {'manifest', 'usd'}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: packages/mitsuba_video/dist/*
+
+  publish:
+    needs: build
+    if: ${{ inputs.publish && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

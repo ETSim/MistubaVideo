@@ -1,150 +1,137 @@
-# mitsuba-video: path-traced videos of fields on moving bodies
+# mitsuba-video
 
-`mitsuba-video` renders rigid bodies with [Mitsuba 3](https://www.mitsuba-renderer.org/) while a per-texel scalar
-*field* evolves in each body's UV atlas: wear, damage, temperature, coverage, and so on. Every frame:
+Render 3D frames and videos with Mitsuba 3. Use it for animations, camera sweeps, material comparisons or
+simulation output. Scalar fields on UV-mapped surfaces are optional: temperature, damage, wear, coverage and
+other quantities can drive a heatmap or a material transition.
 
-- the bodies are re-posed;
-- the field drives a material blend (base → affected) and an optional heatmap;
-- a side panel shows the UV atlas and a covered-area chart.
-
-The frames are then encoded to mp4.
-
-It is project-agnostic. Inputs are pluggable **sources**:
-
-| Source | Input | Notes |
-|---|---|---|
-| `manifest` | `manifest.json`: OBJ meshes, `.mtl` or inline materials, poses, field images | Any project can write one (see below) |
-| `texturefriction` | a TextureFriction `--record` run (`simulation_<ts>/` or `.h5`) | Fields `wear`, `sliding`; `tf-render` is a shortcut |
-| *yours* | anything | Register a class under the `mitsuba_video.sources` entry point |
-
-## Install and run
+## Install
 
 ```bash
-pip install -e "packages/mitsuba_video[texturefriction]"   # drop the extra if you don't need h5py
-mitsuba-video fixture demo                                   # synthetic manifest to try things on
-mitsuba-video inspect demo
-mitsuba-video preview demo                                   # 960x540, 16 spp, every 8th frame
-mitsuba-video render  demo -q paper --camera orbit --title "Wear on a plane" --ramp 0.2
-mitsuba-video encode  demo/render_heatmap --fps 15 --hold 4  # new fps/title without re-rendering
-mitsuba-video render  demo --resume                          # continue an interrupted render
+python -m pip install -e packages/mitsuba_video
+# Optional USD and Jupyter support:
+python -m pip install -e "packages/mitsuba_video[usd,notebook]"
+mitsuba-video doctor
 ```
 
-| Command | What it does |
-|---|---|
-| `render` | Path traces every selected frame, then encodes `<prefix>_<look>_<camera>.mp4`. `-q preview\|draft\|paper` sets resolution and spp; `--res`/`--spp` override the preset. |
-| `preview` | Quick framing and look check before a long render. |
-| `inspect` | Bodies, materials, frames, motion and field coverage. |
-| `encode` | Re-encodes rendered frames with a new fps, title card, hold or GIF. No path tracing. |
-| `fixture` | Writes a tiny synthetic input (`--kind manifest\|texturefriction`). |
-| `validate` | Checks a manifest against the JSON schema and that its files exist. |
-| `export manifest` | Converts any source into a manifest, e.g. a TextureFriction recording for colleagues without h5py. |
-| `sources` | Lists registered sources. |
-| `version` | Prints the package and Mitsuba versions. |
+The core package has no HDF5 or simulator dependency. Python 3.10 or newer is required. FFmpeg is needed to
+encode videos; individual PNG and EXR frames can be rendered without it.
 
-Common options:
+## Render an animation
 
-- **Source:** `--source` (default `auto`), `-O KEY=VALUE` source options, `--field NAME`.
-- **Look:** `--look heatmap|worn|plain`.
-- **Camera:** `--camera fixed|track|orbit` with `--azimuth`, `--elevation`, `--zoom`, `--orbit-degrees`.
-- **Scene:** `--hide BODY` leaves a body out of the 3D view (its panel stays). A sliding body wears on the face that
-  touches its partner, so hiding the partner and using a negative `--elevation` films that face from below; add
-  `--no-ground --key-light 0` so the floor and the key light's emitter stay out of the shot.
-- **Display only** (labelled): `--ramp` (opacity fades in with the field) and `--display-max` (colour-bar range).
-- **Video:** `--title`, `--subtitle`, `--hold`, `--fps`.
+```bash
+mitsuba-video fixture output/cube --frames 24
+mitsuba-video render output/cube -q preview --no-encode
+mitsuba-video encode output/cube/render_plain --fps 40 --hold 0
+```
 
-`--resume` refuses to continue if the settings changed. The Mitsuba variant is `cuda_ad_rgb` when available, then `llvm_ad_rgb`, then `scalar_rgb`.
+The default fixture is a cube following a prescribed ballistic arc. It has geometry and poses with no scalar
+fields. The default look is `plain`. `beauty/` contains the 3D PNGs; `frames/` contains annotated images for video
+encoding. `--keep-exr` also saves linear HDR frames.
 
-Without `--panel-body`, the side panel shows the (up to three) bodies with the most covered texels in the last
-frame.
+Use `--frames 0:120:2` to select input frames, `--camera fixed|track|orbit` to choose a camera path, and `--azimuth`
+and `--elevation` to adjust the view. `--resume` reuses completed frames when settings match; keep input assets
+unchanged between runs. `mitsuba-video tui` guides setup in the terminal.
 
-### Speed
+## Add an optional scalar field
 
-Path tracing is usually the only large per-frame cost. The rest is kept small:
+```bash
+mitsuba-video fixture output/temperature --kind temperature
+mitsuba-video render output/temperature --field temperature --look heatmap -q preview
+mitsuba-video fixture output/damage --kind damage
+mitsuba-video render output/damage --field damage --look material -q preview
+```
 
-- A recording is opened once, and material images are decoded only when a material is built. Decodes are shared by
-  content, so twenty cubes cut from four materials decode four materials.
-- Bodies with the same material share one resized stack. Unworn bodies share one set of encoded textures.
-- A frame re-blends only the 128-texel tiles whose field changed, plus the wear blur's reach. This gives the same
-  textures as a full rebuild.
-- Unchanged field PNGs are not decoded again, and frame PNGs are written with fast compression.
+`plain` ignores fields, `heatmap` overlays the selected quantity, and `material` blends the base and affected
+material appearances. The older `worn` look remains an alias for field-driven appearance. A scalar field is a
+normalized image in a body's UV coordinates; row zero is the top of the image. Geometry without fields does not
+need an atlas. Display labels and thresholds belong to the source, so the renderer does not assign physical
+meaning to a field.
 
-On a 20-cube recording with a 2048² plate at 960x540 / 16 spp, these changes cut the time per frame from 1.3 s to
-0.5 s. Mitsuba itself takes 0.19 s of that.
-
-## Writing a manifest from your project
+## Write input from Python
 
 ```python
+import numpy as np
 from mitsuba_video.sources.manifest.writer import ManifestWriter
 
-w = ManifestWriter("out/pin_on_disc", name="pin on disc", length_unit="m")
-w.add_field("wear", label="wear depth, normalized", threshold=0.002)
-w.add_body(0, "disc", vertices, normals, uvs, faces, fixed=True,
-           material={"base": {"albedo": [0.5, 0.5, 0.55], "roughness": 0.6},
-                     "worn": {"roughness": 0.25}})
-w.add_body(1, "pin", mesh="assets/pin.obj", material={"mtl": "assets/pin.mtl"})
-for t, positions, quats, wear0 in my_simulation():       # positions [N,3]; quats [N,4] as (w, x, y, z)
-    w.add_frame(t, positions, quats, fields={"wear": {0: wear0}})   # HxW float in [0, 1], row 0 = V = 1
-w.close()                                                 # manifest.json + poses.npz + fields/*.png
+writer = ManifestWriter("output/run", name="My animation")
+writer.add_body(0, "object", vertices, normals, uvs, faces,
+                material={"base": {"albedo": [0.2, 0.4, 0.6], "roughness": 0.5}})
+for t, position, orientation in frames:
+    writer.add_frame(t, position, orientation)  # arrays [N,3] and [N,4], quaternion order (w,x,y,z)
+writer.close()
 ```
 
-The format is versioned JSON, described by `src/mitsuba_video/sources/manifest/schema/manifest-v1.schema.json`:
+To include a field, call `writer.add_field("temperature", label="temperature, normalized")`, then pass
+`fields={"temperature": {0: image}}` to `add_frame`. Use `material={"base": {...}, "affected": {...}}` for a
+field-driven change. The older `worn` material key is still accepted. Material channels include albedo, roughness,
+normal, height, metallic and an optional AO texture. Metallic can be a constant or image. AO multiplies albedo in
+linear space as an artistic approximation. The path tracer already calculates light transport.
 
-- **Bodies:** OBJ meshes, plus either an `.mtl` material (`map_Kd`, `map_Bump`, `map_Pr`, `map_disp` and their `*_worn` variants) or inline `base`/`worn` appearances (colours, values or image paths).
-- **Poses:** `poses.npz` (`time[F]`, `position[F,N,3]`, `orientation[F,N,4]`) or inline per-frame entries.
-- **Fields:** per-frame atlas images (`.npy` float or 8/16-bit PNG) located by `field_pattern`.
+Manifests refer to OBJ meshes and inline or MTL materials. The format is defined by
+`src/mitsuba_video/sources/manifest/schema/manifest-v1.schema.json`. `mitsuba-video validate` checks the manifest;
+`inspect` reports bodies, motion and available fields. `export manifest SOURCE OUT` converts an installed source
+into this portable format, including fieldless animations.
 
-## Adding a source
+## Materials and geometry
 
-Implement the `Source` protocol (`src/mitsuba_video/source.py`). It must provide:
+`--shading pbr|diffuse|metallic|ao` chooses surface shading independently of the field display. PBR uses the
+material's maps and values. Diffuse removes the specular lobe, metallic forces a metallic surface for inspection,
+and AO shows geometric hemisphere occlusion within 20% of the scene bounding diagonal.
 
-- `probe`, `open`, `pose`, `field`, `describe`, `close`;
-- the attributes `bodies`, `frames`, `fields` and `primary_field`.
+`--face-normals` produces faceted meshes. `--displacement-scale` defaults to zero and offsets existing vertices
+using the base height map: `scale * (height - 0.5)` in world units. It does not subdivide or animate displacement;
+use a dense mesh for silhouette detail.
 
-Each `Body` carries a `MaterialProvider` that builds `(base, worn)` maps at a requested size. A material with more
-than two stages, or with channels that do not all change, can instead define `build_stack` and return a
-`VariantStack` (`blend.py`): 1, 2 or 4 slices per channel, unworn first. Register the class:
+The field material blend supports one, two or four stages per channel. Scalar remapping, height shaping and
+spherical normal interpolation are reusable across source formats. Legacy wear-named blend parameters retain
+their serialized names for compatibility.
+
+## Backends and performance
+
+`--variant auto` tests CUDA, Metal, LLVM and scalar backends in that order. Explicit `cuda`, `metal`, `cpu` and
+`scalar` choices are available. `--blend-device` selects scalar-field material processing separately. CUDA OptiX
+`--denoise` uses albedo and normal guides; inspect fine detail after denoising.
+
+Quality presets are `preview` (960x540, 16 samples), `draft` (1280x720, 64) and `paper` (1920x1080, 256).
+Override with `--res` and `--spp`. The scene is reused across frames; unchanged poses and fields skip redundant
+updates. CPU field blending updates changed tiles where supported. `render_config.json` records the actual
+backend and per-step timings.
+
+Blender Cycles and EEVEE are optional alternate backends (`--backend cycles|eevee`); set `--blender` or
+`MITSUBA_VIDEO_BLENDER` to select an executable. The scene package includes an animated `.blend` file. Surface
+shading overrides and faceted normals currently require the Mitsuba backend. `--displace` retains the subdivided,
+per-frame height-map path alongside the simpler static `--displacement-scale` option.
+
+`--annotate labels.json --resume --recompose` rebuilds annotations and panels from saved beauty frames. Frame
+reading and PNG/composite writing can overlap path tracing; timings distinguish background writing from the
+render loop.
+
+## Source plugins
+
+Manifest and USD are built in. Other projects provide adapters in their own packages and register entry points:
 
 ```toml
 [project.entry-points."mitsuba_video.sources"]
-mysim = "mysim_video:MySimSource"
+my_simulation = "my_package.video:SimulationSource"
 ```
 
-## The material blend
+Implement the `Source` protocol in `source.py`: bodies, frames, poses, metadata and optional fields. Set
+`fields={}` and `primary_field=""` for geometry-only sources; the renderer will not call a field reader.
+Each body supplies a material provider. A provider can return base/affected maps or implement `build_stack`
+for multiple stages. Optional fixture writers register under `mitsuba_video.fixtures`.
 
-`blend.py` ports TextureFriction's viewer shader (`basicShader.frag`, `basicCommon.glsl`). Per texel, the field goes
-through a Hermite ramp between two edges, can be reshaped by the height difference between the unworn and worn
-slices, and then selects the slices:
+Plugins own file-format dependencies, simulator conventions, presets and specialized CLI options. The renderer
+loads installed plugins through package metadata without searching sibling checkouts. See the repository's
+`docs/plugins.md` for the interface and migration guide.
 
-- two slices: albedo and roughness are mixed linearly, normals follow the great circle between the two;
-- four slices: the ramp is cut at 1/3 and 2/3, so at most two neighbouring stages mix at any texel (normals are
-  averaged on the sphere around the heavier one);
-- one slice: the channel does not change.
+## Tests and examples
 
-The `texturefriction` source takes the slices from the recording's material atlas the way the viewer packs its
-atlases, and turns on the viewer's presentation terms (`VIEWER_BLEND`): a light blur of the field, a feathered start,
-worn normals that keep 30% of their detail, and a roughness floor. The settings the viewer had while recording
-(`metadata/scene/variant_blend`) override the defaults. Other sources get the plain blend unless they set `blend`.
+```bash
+python -m pip install -e "packages/mitsuba_video[test]"
+python -m pytest packages/mitsuba_video/tests -q
+python -m ruff check packages/mitsuba_video examples
+python -m build packages/mitsuba_video
+```
 
-## Outputs
-
-Each render folder holds:
-
-- `beauty/`: the 3D render.
-- `frames/`: the encoded composites.
-- `exr/`: linear HDR frames (only with `--keep-exr`).
-- `<field>_area.csv`: covered texels and area per frame (`worn_area.csv` for TextureFriction). The chart is drawn from this file.
-- `render_config.json`: the settings signature, Mitsuba variant and timings.
-- The mp4 (plus a GIF with `--gif`).
-
-## Tests
-
-`pytest` (in this folder) covers:
-
-- transforms and the blend math, including the four-stage weights and the viewer's channel choice;
-- the OBJ and MTL readers;
-- the manifest schema and writer;
-- TextureFriction → manifest parity;
-- a golden comparison of the TextureFriction source against the original renderer;
-- CLI and render smoke tests (skipped without Mitsuba or ffmpeg).
-
-Origin: TextureFriction's `tools/mitsuba_render` (ETSim/TextureWear), which now installs this package pinned by commit.
+The repository notebook, `notebooks/getting_started.ipynb`, covers plain animation, multiple views, encoding,
+faceted normals, displacement, USD and optional fields. Adapter-specific tests live with their plugins.

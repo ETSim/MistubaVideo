@@ -78,21 +78,6 @@ def test_lower_scratch_density_draws_fewer_lines():
     assert not bl.scratch_field(direction, region, 10.0, density=0.0).any()
 
 
-def test_render_worn_look_overrides():
-    import typer
-    from mitsuba_video.cli import _blend_overrides
-
-    base = bl.BlendParams()
-    assert _blend_overrides(base, 0.0, 0.0, base.scratch_density, None, None) is base
-    p = _blend_overrides(base, 0.6, 0.0, 0.01, "0.35,0.95", 0.9)
-    assert (p.scratches, p.burnish, p.scratch_density) == (0.6, 0.0, 0.01)
-    assert (p.edge0, p.edge1, p.height_strength) == (0.35, 0.95, 0.9)
-    for bad in ("0.5", "0.9,0.2", "a,b"):
-        try:
-            _blend_overrides(base, 0.0, 0.0, base.scratch_density, bad, None)
-        except typer.BadParameter:
-            continue
-        raise AssertionError(bad)
 
 
 def test_edge_wear_moves_worn_rims_ahead_and_leaves_unworn_texels():

@@ -129,3 +129,74 @@ def test_compose_frame_drops_side_panels_when_too_small():
     assert tiny.size == (64, 36)  # no room for a legible column: beauty only
     full = video.compose_frame(np.zeros((180, 320, 3), np.uint8), [panel], "h", "s")
     assert full.size == (320 + int(180 * 0.42), 180)
+
+
+def test_compose_frame_lays_four_and_six_bodies_out_in_two_columns():
+    # Four lanes / six tiles: every worn body gets a panel (two columns past three) instead of the first three.
+    from mitsuba_video import video
+    from mitsuba_video.pipeline import MAX_PANELS
+
+    assert MAX_PANELS >= 6
+    beauty = np.zeros((540, 960, 3), np.uint8)
+    for n in (3, 4, 6):
+        panels = [(video.PanelSource(k, f"body {k}", (0, 0, 8, 8)), np.full((8, 8), 0.9, np.float32))
+                  for k in range(n)]  # fmt: skip
+        frame = np.asarray(video.compose_frame(beauty, panels, "h", "s"))
+        column = frame[: int(540 * 0.7), 960:]  # the panels, above the colour-bar footer
+        # columns holding the bright wear colour (0.9): one run of them per panel column
+        hot = ((column[..., 0] > 200) & (column[..., 2] < 120)).any(axis=0).astype(int)  # yellow wear, not white text
+        runs = int((np.diff(np.concatenate([[0], hot])) == 1).sum())
+        assert runs == (2 if n > 3 else 1), f"{n} panels laid out in {runs} columns"
+
+
+def test_resume_matches_an_envmap_moved_to_another_folder(tmp_path):
+    import json as _json
+
+    import pytest as _pytest
+
+    from mitsuba_video.pipeline import CONFIG_NAME, _check_resume
+
+    old = {"lighting": {"envmap": r"D:\Code\Example\resources\environement\studio_small_09_2k.exr", "fill": 0.18}}
+    (tmp_path / CONFIG_NAME).write_text(_json.dumps({"signature": old}))
+    _check_resume(tmp_path, {"lighting": {"envmap": "D:/Code/TF/resources/environment/studio_small_09_2k.exr",
+                                          "fill": 0.18}})  # fmt: skip
+    with _pytest.raises(RuntimeError, match="lighting"):  # another HDR, or other light settings, still refuse
+        _check_resume(tmp_path, {"lighting": {"envmap": "D:/Code/TF/resources/environment/workshop_4k.exr",
+                                              "fill": 0.18}})  # fmt: skip
+
+
+
+
+def test_resume_reads_a_linear_render_from_before_wear_gamma(tmp_path):
+    import json as _json
+
+    import pytest as _pytest
+
+    from mitsuba_video.pipeline import CONFIG_NAME, _check_resume
+
+    (tmp_path / CONFIG_NAME).write_text(_json.dumps({"signature": {"blend": {"edge0": 0.02}}}))
+    _check_resume(tmp_path, {"blend": {"edge0": 0.02, "wear_gamma": 1.0}})
+    with _pytest.raises(RuntimeError, match="blend"):
+        _check_resume(tmp_path, {"blend": {"edge0": 0.02, "wear_gamma": 0.5}})
+
+
+
+
+def test_tonemap_matches_the_expression_form_byte_for_byte():
+    # video.tonemap is written in place for the frame-writer thread; it must stay the ACES + sRGB expression it replaced.
+    from mitsuba_video import video
+
+    def reference(rgb, exposure):
+        x = np.maximum(rgb, 0.0) * (2.0**exposure)
+        a, b, c, d, e = 2.51, 0.03, 2.43, 0.59, 0.14
+        mapped = np.clip((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0)
+        return (color.linear_to_srgb(mapped) * 255.0 + 0.5).astype(np.uint8)
+
+    rng = np.random.default_rng(3)
+    edge = np.array([[[0.0, -1.0, 1e-9], [0.0031308, 0.0031307, 0.0031309], [np.nan, np.inf, -np.inf],
+                      [1e30, 3.4e38, 1e-38]]], dtype=np.float32)  # fmt: skip
+    for rgb in ((rng.random((64, 96, 3), dtype=np.float32) * 4.0) ** 3,
+                rng.standard_normal((32, 48, 3)).astype(np.float32), edge):  # fmt: skip
+        for exposure in (0.0, 0.5, -1.0):
+            with np.errstate(all="ignore"):
+                np.testing.assert_array_equal(video.tonemap(rgb, exposure), reference(rgb, exposure))
